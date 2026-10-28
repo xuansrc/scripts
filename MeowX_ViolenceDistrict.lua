@@ -47,20 +47,20 @@ local MEOW_BUILD = (function()
 
 	local API = createFeatureAPI("MeowX_" .. GAME_KEY)
 
-	local okLibrary, NoxLibrary = pcall(function()
+	local okLibrary, MeowXLibrary = pcall(function()
 		return loadstring(game:HttpGet(UI_SOURCE_URL))()
 	end)
-	if not okLibrary or type(NoxLibrary) ~= "table" then
-		error("failed to load UI library: " .. tostring(NoxLibrary), 0)
+	if not okLibrary or type(MeowXLibrary) ~= "table" then
+		error("failed to load UI library: " .. tostring(MeowXLibrary), 0)
 	end
 	pcall(function()
-		NoxLibrary:LoadFont({ Name = "ValleySans" })
+		MeowXLibrary:LoadFont({ Name = "ValleySans" })
 	end)
 	pcall(function()
-		NoxLibrary:SetDefaultTheme("Mono")
+		MeowXLibrary:SetDefaultTheme("Mono")
 	end)
 
-	local Window = NoxLibrary:CreateWindow({
+	local Window = MeowXLibrary:CreateWindow({
 		Name = "MeowX Hub",
 		LoadingSubtitle = SCRIPT_VERSION,
 		ToggleUIKeybind = "RightControl",
@@ -99,7 +99,7 @@ local MEOW_BUILD = (function()
 		end)
 	end
 
-	-- ================= PanduUi-compatible adapter on top of NoxFlow =================
+	-- ================= PanduUi-compatible adapter on top of MeowXFlow =================
 	local NOOP = function() end
 	local TAB_ICONS = { Main = "home", Survivor = "user", Killer = "skull", Visual = "eye", Teleport = "map-pin", Settings = "settings" }
 	local SKIP_TITLES = { ["Menu Keybind"] = true, ["Transparency Toggle"] = true, ["Lock GUI"] = true, ["Watermark"] = true }
@@ -208,13 +208,13 @@ local MEOW_BUILD = (function()
 			tab.nextSide = side == "Left" and "Right" or "Left"
 			local ok, gb = pcall(function()
 				if side == "Left" then
-					return tab.nox:AddLeftGroupbox(self.name, self.icon)
+					return tab.meowx:AddLeftGroupbox(self.name, self.icon)
 				end
-				return tab.nox:AddRightGroupbox(self.name, self.icon)
+				return tab.meowx:AddRightGroupbox(self.name, self.icon)
 			end)
 			if not ok or not gb then
 				ok, gb = pcall(function()
-					return tab.nox:CreateGroupbox({ Name = self.name, Side = side })
+					return tab.meowx:CreateGroupbox({ Name = self.name, Side = side })
 				end)
 			end
 			self.gb = ok and gb or nil
@@ -349,19 +349,9 @@ local MEOW_BUILD = (function()
 		return h
 	end
 
-	function Section:AddKeybind(title, default, cb, o)
-		if SKIP_TITLES[title] then
-			return setmetatable({}, Handle)
-		end
-		o = o or {}
-		return build(self, "CreateKeybind", {
-			Name = title,
-			CurrentKeybind = (default ~= "None" and default) or nil,
-			Flag = uniqueFlag(o.Flag),
-			Callback = function(key)
-				safe(cb, key)
-			end,
-		}, default, "Keybind")
+	-- keybinds removed on request
+	function Section:AddKeybind()
+		return setmetatable({}, Handle)
 	end
 
 	function Section:AddColorPicker(color, o)
@@ -382,40 +372,8 @@ local MEOW_BUILD = (function()
 		return h
 	end
 
-	-- attached to a toggle: a keybind row that flips the toggle
-	function Handle.AddKeyPicker(self, name, o)
-		local section = self.Section
-		if not section then
-			return
-		end
-		if type(name) == "table" and o == nil then
-			o, name = name, "None"
-		end
-		o = o or {}
-		local label = o.Text or ((self.Title or "Toggle") .. " Key")
-		local flag
-		if name ~= nil and name ~= "None" then
-			flag = uniqueFlag("KP_" .. clean(name))
-		end
-		local busy = false
-		local kb = build(section, "CreateKeybind", {
-			Name = label,
-			CurrentKeybind = (o.Default and o.Default ~= "None" and o.Default) or nil,
-			Flag = flag,
-			Callback = function()
-				if busy then
-					return
-				end
-				busy = true
-				local new = not self.Value
-				self:SetValue(new)
-				if o.Callback then
-					safe(o.Callback, new)
-				end
-				busy = false
-			end,
-		}, nil, "Keybind")
-		return kb
+	function Handle.AddKeyPicker()
+		return setmetatable({}, Handle)
 	end
 	Handle.AddColorPicker = function(self, color, o)
 		return Section.AddColorPicker(self.Section, color, o)
@@ -423,10 +381,10 @@ local MEOW_BUILD = (function()
 
 	function Section:AddConfigManager()
 		pcall(function()
-			self.tab.nox:CreateConfigManager({ Side = "Left" })
+			self.tab.meowx:CreateConfigManager({ Side = "Left" })
 		end)
 		pcall(function()
-			self.tab.nox:CreateThemeManager({ Side = "Right" })
+			self.tab.meowx:CreateThemeManager({ Side = "Right" })
 		end)
 		self.noGroup = true
 	end
@@ -461,8 +419,8 @@ local MEOW_BUILD = (function()
 	function Lib:CreateWindow()
 		local win = {}
 		function win:CreateTab(name)
-			local nox = Window:CreateTab({ Name = name, Icon = TAB_ICONS[name] or "box" })
-			return setmetatable({ nox = nox, nextSide = "Left" }, Tab)
+			local meowx = Window:CreateTab({ Name = name, Icon = TAB_ICONS[name] or "box" })
+			return setmetatable({ meowx = meowx, nextSide = "Left" }, Tab)
 		end
 		return setmetatable(win, {
 			__index = function(_, key)
@@ -507,7 +465,7 @@ do
         SphereImage = "rbxassetid://123052226839946",
         SphereIconSize = 38,
         Watermark = true,
-        WatermarkText = "NOX",
+        WatermarkText = "MeowX Hub",
         WatermarkIcon = "rbxassetid://123052226839946",
     })
 
@@ -537,7 +495,7 @@ do
     _G.Ox.NEX_CureFlaskLaserPart = nil
     _G.Ox.InfiniteLungeEnabled = false
 
-    -- ===== NOX Net: remote protocol used by the current game client (request-id + character) =====
+    -- ===== MeowX Net: remote protocol used by the current game client (request-id + character) =====
     _G.Ox.Net = (function()
         local N = {ids = {}, active = {}}
         local function remote(...)
@@ -657,6 +615,217 @@ do
         end
 
         return N
+    end)()
+
+    -- ===== Human-like walker: PathfindingService + Humanoid:MoveTo, never teleports =====
+    -- Shared by Auto Stomp Pumpkins, Heal Team and Auto Help Trap Team. It only moves the character
+    -- with Humanoid:MoveTo along a computed navmesh path (so it goes around walls and never through
+    -- them), jumps only when a waypoint asks for it or the character is stuck, and re-plans when the
+    -- target moves or the route gets blocked. Only one feature walks at a time; higher priority wins.
+    _G.Ox.Walk = (function()
+        local PathfindingService = game:GetService("PathfindingService")
+        local W = {owner = nil, prio = 0, since = 0, preempt = nil}
+
+        local function flatDist(a, b)
+            return Vector3.new(a.X - b.X, 0, a.Z - b.Z).Magnitude
+        end
+
+        function W.try(owner, prio)
+            if W.owner == nil or W.owner == owner or os.clock() - W.since > 90 then
+                W.owner, W.prio, W.since, W.preempt = owner, prio, os.clock(), nil
+                return true
+            end
+            if prio > W.prio then
+                W.preempt = prio
+            end
+            return false
+        end
+
+        function W.free(owner)
+            if W.owner == owner then
+                W.owner, W.prio, W.preempt = nil, 0, nil
+            end
+        end
+
+        local function parts()
+            local char = localPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if hum and root and root.Parent and hum.Health > 0 then
+                return hum, root
+            end
+            return nil
+        end
+
+        function W.halt()
+            local hum, root = parts()
+            if hum and root then
+                hum:MoveTo(root.Position)
+            end
+        end
+
+        -- opts: stop (3D studs, default 3), timeout (s, default 30), alive() -> bool,
+        --       follow() -> Vector3 for a moving target, owner, prio
+        -- returns "reached" | "nopath" | "stuck" | "timeout" | "cancelled" | "preempted"
+        function W.to(goal, opts)
+            opts = opts or {}
+            local stop = opts.stop or 3
+            local deadline = os.clock() + (opts.timeout or 30)
+            local alive, follow = opts.alive, opts.follow
+            local owner, prio = opts.owner, opts.prio or 0
+
+            local function currentGoal()
+                if follow then
+                    return follow()
+                end
+                return goal
+            end
+
+            local function verdict(root)
+                if not _G.Ox.ScriptAlive then
+                    return "cancelled"
+                end
+                if alive and not alive() then
+                    return "cancelled"
+                end
+                if owner and W.owner == owner and W.preempt and W.preempt > prio then
+                    return "preempted"
+                end
+                if os.clock() > deadline then
+                    return "timeout"
+                end
+                local g = currentGoal()
+                if not g then
+                    return "cancelled"
+                end
+                if (root.Position - g).Magnitude <= stop then
+                    return "reached"
+                end
+                return nil
+            end
+
+            local function done(result)
+                W.halt()
+                return result
+            end
+
+            local attempts = 0
+            while true do
+                local hum, root = parts()
+                if not hum then
+                    return "cancelled"
+                end
+                local fin = verdict(root)
+                if fin then
+                    return done(fin)
+                end
+
+                attempts += 1
+                if attempts > 8 then
+                    return done("stuck")
+                end
+
+                local target = currentGoal()
+                local path = PathfindingService:CreatePath({
+                    AgentRadius = 2,
+                    AgentHeight = 5,
+                    AgentCanJump = true,
+                    AgentCanClimb = false,
+                    WaypointSpacing = 4,
+                })
+                local okPath = pcall(function()
+                    path:ComputeAsync(root.Position, target)
+                end)
+                local waypoints = nil
+                if okPath and path.Status == Enum.PathStatus.Success then
+                    waypoints = path:GetWaypoints()
+                end
+
+                if not waypoints or #waypoints < 2 then
+                    if attempts >= 3 then
+                        return done("nopath")
+                    end
+                    task.wait(0.3)
+                else
+                    local replan = false
+                    for i = 2, #waypoints do
+                        local wp = waypoints[i]
+                        if wp.Action == Enum.PathWaypointAction.Jump then
+                            hum.Jump = true
+                        end
+                        hum:MoveTo(wp.Position)
+
+                        local started = os.clock()
+                        local lastCheck, lastPos = started, root.Position
+                        local strikes = 0
+                        while true do
+                            task.wait(0.05)
+                            local h2, r2 = parts()
+                            if not h2 then
+                                return "cancelled"
+                            end
+                            local f2 = verdict(r2)
+                            if f2 then
+                                return done(f2)
+                            end
+                            if flatDist(r2.Position, wp.Position) < 2.5 and math.abs(r2.Position.Y - wp.Position.Y) < 6 then
+                                break
+                            end
+                            if follow then
+                                local g = follow()
+                                if g and (g - target).Magnitude > 8 then
+                                    replan = true
+                                    break
+                                end
+                            end
+                            local now = os.clock()
+                            if now - lastCheck > 0.6 then
+                                if (r2.Position - lastPos).Magnitude < 0.5 then
+                                    strikes += 1
+                                    h2.Jump = true
+                                    if strikes >= 3 then
+                                        replan = true
+                                        break
+                                    end
+                                else
+                                    strikes = 0
+                                end
+                                lastPos, lastCheck = r2.Position, now
+                            end
+                            if now - started > 5 then
+                                replan = true
+                                break
+                            end
+                        end
+                        if replan then
+                            break
+                        end
+                    end
+
+                    if not replan then
+                        -- route finished: short straight approach so the last studs are exact (walls still block it)
+                        local g = currentGoal()
+                        if g then
+                            hum:MoveTo(g)
+                            local fa = os.clock()
+                            while os.clock() - fa < 1.2 do
+                                task.wait(0.05)
+                                local h4, r4 = parts()
+                                if not h4 then
+                                    return "cancelled"
+                                end
+                                local f4 = verdict(r4)
+                                if f4 then
+                                    return done(f4)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return W
     end)()
 
     local tbl5 = {
@@ -1977,7 +2146,7 @@ do
     end)
 
     local cylinderHandleAdornment = Instance.new("CylinderHandleAdornment")
-    cylinderHandleAdornment.Name = "NOX_ParryRange_V2"
+    cylinderHandleAdornment.Name = "MeowX_ParryRange_V2"
     local range = _G.Ox.ParryV2.Range
     local radius = range or 12
     cylinderHandleAdornment.Radius = radius
@@ -5735,105 +5904,7 @@ do
         end)
     end
 
-    local flag2 = false
-
-    local function fn23()
-        if GetRole() ~= "Killer" then
-            return
-        end
-        local selectedKiller = localPlayer:FindFirstChild("SelectedKiller")
-        local attribute = selectedKiller and selectedKiller.Value or localPlayer:GetAttribute("SelectedKiller")
-
-        if attribute and string.find(string.lower(tostring(attribute)), "abyss") then
-            pcall(function()
-                local corrupt = ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("Killers"):FindFirstChild("Abysswalker"):FindFirstChild("corrupt")
-
-                if corrupt then
-                    -- current protocol: corrupt("start"|"fire"|"finish", 1, character)
-                    local char = localPlayer.Character
-                    corrupt:FireServer("start", 1, char)
-                    task.wait(0.05)
-                    corrupt:FireServer("fire", 1, char)
-                    task.wait(0.05)
-                    corrupt:FireServer("finish", 1, char)
-                end
-            end)
-        end
-    end
-
-    local function fn24()
-        if flag2 then
-            return
-        end
-        flag2 = true
-
-        task.spawn(function()
-            while flag2 and _G.Ox.InfAbyssalEnabled and GetRole() == "Killer" do
-                fn23()
-                task.wait(0.5)
-            end
-        end)
-    end
-
-    fn13 = function()
-        flag2 = false
-    end
-
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if gameProcessed then
-            return
-        end
-
-        if _G.Ox.InfAbyssalEnabled and input.KeyCode == Enum.KeyCode.Q then
-            fn24()
-        end
-    end)
-
-    UserInputService.InputEnded:Connect(function(input)
-        if input.KeyCode == Enum.KeyCode.Q then
-            fn13()
-        end
-    end)
-
-    task.spawn(function()
-        while _G.Ox.ScriptAlive do
-            task.wait(0.5)
-            if not _G.Ox.ScriptAlive then
-                break
-            end
-
-            if _G.Ox.InfAbyssalEnabled and GetRole() == "Killer" then
-                local playerGui2 = localPlayer:FindFirstChild("PlayerGui")
-
-                if playerGui2 then
-                    local v4 = nil
-
-                    for k, child in pairs(playerGui2:GetChildren()) do
-                        if string.sub(child.Name, -4) == "-mob" and child.Name ~= "Survivor-mob" then
-                            v4 = child
-                            break
-                        end
-                    end
-
-                    if v4 then
-                        local controls = v4:FindFirstChild("Controls")
-
-                        if controls then
-                            local move2 = controls:FindFirstChild("move2")
-
-                            if move2 and move2.Visible then
-                                fn24()
-                            else
-                                fn13()
-                            end
-                        end
-                    end
-                end
-            else
-                fn13()
-            end
-        end
-    end)
+    -- Infinite Corrupt (Abyssal) removed
 
     EnableInfiniteLunge = function()
         _G.Ox.InfiniteLungeEnabled = true
@@ -7773,12 +7844,12 @@ do
         local num = tonumber(arg)
         local n2 = num or 0
         local v5 = n2
-        local noxHookCounter = parent:FindFirstChild("NOX_HookCounter")
-        local v6 = noxHookCounter
+        local meowxHookCounter = parent:FindFirstChild("MeowX_HookCounter")
+        local v6 = meowxHookCounter
 
         if v5 <= 0 then
-            if noxHookCounter then
-                noxHookCounter:Destroy()
+            if meowxHookCounter then
+                meowxHookCounter:Destroy()
             end
 
             return
@@ -7789,10 +7860,10 @@ do
             return
         end
 
-        if not noxHookCounter then
+        if not meowxHookCounter then
             local imageLabel = Instance.new("ImageLabel")
             v6 = imageLabel
-            imageLabel.Name = "NOX_HookCounter"
+            imageLabel.Name = "MeowX_HookCounter"
             imageLabel.BackgroundTransparency = 1
             local zIndex = parent.ZIndex
             local n3 = zIndex or 1
@@ -7850,10 +7921,10 @@ do
                                     local attribute2 = v14 or playerByUserId:GetAttribute("HookCount") or 0
                                     CreateHookUICounter(imageLabel, attribute2)
                                 else
-                                    local noxHookCounter = imageLabel:FindFirstChild("NOX_HookCounter")
+                                    local meowxHookCounter = imageLabel:FindFirstChild("MeowX_HookCounter")
 
-                                    if noxHookCounter then
-                                        noxHookCounter:Destroy()
+                                    if meowxHookCounter then
+                                        meowxHookCounter:Destroy()
                                     end
                                 end
                             end
@@ -7893,10 +7964,10 @@ do
                 if frame2 and frame2:IsA("Frame") then
                     for i, child in ipairs(frame2:GetChildren()) do
                         local imageLabel = child:FindFirstChild("ImageLabel")
-                        local noxHookCounter = imageLabel and imageLabel:FindFirstChild("NOX_HookCounter")
+                        local meowxHookCounter = imageLabel and imageLabel:FindFirstChild("MeowX_HookCounter")
 
-                        if noxHookCounter then
-                            noxHookCounter:Destroy()
+                        if meowxHookCounter then
+                            meowxHookCounter:Destroy()
                         end
                     end
 
@@ -11420,10 +11491,6 @@ do
             P.farm = v
         end, {Flag = "PumpkinFarm"})
 
-        PumpCard:AddDropdown("Move Mode", {"Walk", "Teleport"}, false, function(v)
-            P.mode = v
-        end, {Flag = "PumpkinMoveMode"})
-
         PumpCard:AddSlider("Farm Range (studs)", 50, 2000, 800, function(v)
             P.range = v
         end, {Increment = 50, Flag = "PumpkinRange"})
@@ -11432,59 +11499,114 @@ do
             P.esp = v
         end, {Flag = "PumpkinESP"})
 
+        local CSP = game:GetService("CollectionService")
+
+        -- the game's own pumpkin points: BaseParts tagged "pumpkin" (fallback: the HB hitboxes)
+        local function pumpkinPoints()
+            local list = {}
+            for _, part in ipairs(CSP:GetTagged("pumpkin")) do
+                if part:IsA("BasePart") and part:IsDescendantOf(workspace)
+                    and not (part.Parent and CSP:HasTag(part.Parent, "Blocked")) then
+                    list[#list + 1] = part
+                end
+            end
+            if #list == 0 then
+                local folder = pumpkinFolder()
+                if folder then
+                    for _, pumpkin in ipairs(folder:GetChildren()) do
+                        local hb = hitbox(pumpkin)
+                        if hb then
+                            list[#list + 1] = hb
+                        end
+                    end
+                end
+            end
+            return list
+        end
+
+        -- same conditions the game checks before it offers a pumpkin: health > 50, not trapped /
+        -- carried / hooked / downed, and not in the middle of another action
+        local function canStomp(char, hum, hrp)
+            if hum.Health <= 50 or hrp:HasTag("doing action") then
+                return false
+            end
+            if char:GetAttribute("Trapped") or char:GetAttribute("IsCarried") or char:GetAttribute("IsHooked") or char:GetAttribute("Knocked") then
+                return false
+            end
+            local ci = char:FindFirstChild("CheckInterractable")
+            if ci and (ci:GetAttribute("isVaulting") or ci:GetAttribute("isRepairing") or ci:GetAttribute("isHealing") or ci:GetAttribute("isSliding") or ci:GetAttribute("isUnhooking")) then
+                return false
+            end
+            return true
+        end
+
         task.spawn(function()
             while _G.Ox.ScriptAlive do
-                task.wait(0.12)
-                if P.farm then
-                    pcall(function()
-                        local char = localPlayer.Character
-                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                        local hum = char and char:FindFirstChildOfClass("Humanoid")
-                        local folder = pumpkinFolder()
-                        local crush = crushRemote()
-                        if not (hrp and hum and hum.Health > 0 and folder and crush) then
-                            return
-                        end
-                        local bestPumpkin, bestHB, bestDist
-                        for _, pumpkin in ipairs(folder:GetChildren()) do
-                            local hb = hitbox(pumpkin)
-                            if hb and (P.cooldown[pumpkin] or 0) < tick() then
-                                local d = (hb.Position - hrp.Position).Magnitude
-                                if d <= P.range and (not bestDist or d < bestDist) then
-                                    bestPumpkin, bestHB, bestDist = pumpkin, hb, d
-                                end
+                task.wait(0.2)
+                if P.farm and localPlayer.Team and localPlayer.Team.Name ~= "Killer" then
+                    local Walk = _G.Ox.Walk
+                    if Walk.try("pumpkin", 1) then
+                        pcall(function()
+                            local char = localPlayer.Character
+                            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                            local hum = char and char:FindFirstChildOfClass("Humanoid")
+                            local crush = crushRemote()
+                            if not (hrp and hum and hum.Health > 0 and crush and canStomp(char, hum, hrp)) then
+                                return
                             end
-                        end
-                        if not bestPumpkin then
-                            return
-                        end
-
-                        local function close()
-                            return (hrp.Position - bestHB.Position).Magnitude < 4.5
-                        end
-                        if not close() then
-                            if P.mode == "Walk" then
-                                hum:MoveTo(bestHB.Position)
-                                local t0 = tick()
-                                local limit = math.clamp(bestDist / math.max(hum.WalkSpeed, 8) + 1.5, 2, 8)
-                                while P.farm and bestHB.Parent and not close() and tick() - t0 < limit and hum.Health > 0 do
-                                    task.wait(0.05)
-                                    if tick() - t0 > 0.6 and hum:GetState() == Enum.HumanoidStateType.Running and hrp.AssemblyLinearVelocity.Magnitude < 1 then
-                                        hum.Jump = true
+                            local bestPart, bestDist
+                            for _, part in ipairs(pumpkinPoints()) do
+                                if (P.cooldown[part] or 0) < tick() then
+                                    local d = (part.Position - hrp.Position).Magnitude
+                                    if d <= P.range and (not bestDist or d < bestDist) then
+                                        bestPart, bestDist = part, d
                                     end
                                 end
                             end
-                            if not close() and bestHB.Parent then
-                                hrp.CFrame = CFrame.new(bestHB.Position + Vector3.new(0, 3, 0))
-                                task.wait(0.08)
+                            if not bestPart then
+                                return
                             end
-                        end
-                        if bestHB.Parent then
-                            crush:FireServer(bestHB)
-                            P.cooldown[bestPumpkin] = tick() + 1.5
-                            task.wait(0.15)
-                        end
-                    end)
+
+                            local function stillOk()
+                                local c = localPlayer.Character
+                                local r = c and c:FindFirstChild("HumanoidRootPart")
+                                local h = c and c:FindFirstChildOfClass("Humanoid")
+                                return P.farm and bestPart.Parent ~= nil and r ~= nil and h ~= nil and h.Health > 0
+                                    and canStomp(c, h, r)
+                            end
+
+                            -- walk there on a real path (around walls), stop inside the game's 4 stud radius
+                            local result = Walk.to(bestPart.Position, {
+                                stop = 3.6,
+                                timeout = math.clamp(bestDist / math.max(hum.WalkSpeed, 8) * 2 + 8, 10, 45),
+                                alive = stillOk,
+                                owner = "pumpkin",
+                                prio = 1,
+                            })
+                            if result ~= "reached" then
+                                if result == "nopath" or result == "stuck" or result == "timeout" then
+                                    P.cooldown[bestPart] = tick() + 12
+                                end
+                                return
+                            end
+                            if not stillOk() or (hrp.Position - bestPart.Position).Magnitude > 4 then
+                                return
+                            end
+
+                            -- turn to face it (rotation only, no movement), then crush like a normal press
+                            local flatLook = Vector3.new(bestPart.Position.X, hrp.Position.Y, bestPart.Position.Z)
+                            if (flatLook - hrp.Position).Magnitude > 0.1 then
+                                hrp.CFrame = CFrame.lookAt(hrp.Position, flatLook)
+                            end
+                            task.wait(0.12)
+                            if stillOk() and bestPart.Parent then
+                                crush:FireServer(bestPart)
+                                P.cooldown[bestPart] = tick() + 3
+                                task.wait(1.3) -- the game's PUMPKIN_DURATION
+                            end
+                        end)
+                        Walk.free("pumpkin")
+                    end
                 end
             end
         end)
@@ -12683,8 +12805,8 @@ do
 
     -- Anti Trap (Butcher bear trap): drives the game's own trap UI (FREEING bar + skill check wheel)
     -- through real input, so it looks and behaves like a normal free, only with perfect timing.
-    -- Follows "Skill Check Mode": Instant = forced perfect hits (+ early commit), Legit = perfect
-    -- hits at the real moment, Normal = good hits, Random = Instant / Normal per check.
+    -- Follows "Skill Check Mode": Instant / Legit = perfect hits at the real moment, Normal = good hits,
+    -- Random = perfect / good per check. Nothing is forged (no rotation edits, no early commit).
     local TrapBot = {token = 0, running = false, holding = false}
 
     local function sendBind(attr, default, down)
@@ -12748,6 +12870,23 @@ do
         end)
     end
 
+    -- server truth for "a free attempt is running": the EscapingTrap attribute (the same one the game's
+    -- own struggle visuals watch), with the FREEING prompt as a fallback
+    local function escapingNow()
+        local character = localPlayer.Character
+        if character and character:GetAttribute("EscapingTrap") == true then
+            return true
+        end
+        return freeingNow()
+    end
+
+    local function releaseInteract()
+        if TrapBot.holding then
+            sendBind("kb_interact", "MouseButton1", false)
+            TrapBot.holding = false
+        end
+    end
+
     local function runTrapBot()
         if TrapBot.running then
             return
@@ -12764,26 +12903,32 @@ do
             pcall(function()
                 local clickhold = localPlayer:GetAttribute("clickhold") == true
                 local lastTry = -10
-                local prevRel, prevTime
+                local wasEscaping = false
+                local prevRel
                 local cycleGoal, pressed, cycleMode
-                local perfects, earlySent = 0, false
-                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-                local butcher = remotes and remotes:FindFirstChild("Killers") and remotes.Killers:FindFirstChild("Butcher")
-                local freeTrap = butcher and butcher:FindFirstChild("FreeTrap")
 
                 while alive() do
                     local now = os.clock()
+                    local escaping = escapingNow()
 
-                    if not freeingNow() and now - lastTry > 1.6 then
+                    -- the attempt ended (finished or failed) but we are still trapped: let go completely and
+                    -- start a clean new attempt instead of leaving the input stuck in the old one
+                    if wasEscaping and not escaping then
+                        releaseInteract()
+                        task.wait(0.3)
+                        lastTry = -10
+                        cycleGoal, pressed, prevRel = nil, false, nil
+                    end
+                    wasEscaping = escaping
+
+                    if not escaping and now - lastTry > 1.2 then
                         lastTry = now
                         task.wait(0.35)
                         if not alive() then
                             break
                         end
-                        if TrapBot.holding then
-                            sendBind("kb_interact", "MouseButton1", false)
-                            TrapBot.holding = false
-                        end
+                        releaseInteract()
+                        task.wait(0.1)
                         sendBind("kb_interact", "MouseButton1", true)
                         if clickhold then
                             task.wait(0.05)
@@ -12793,11 +12938,13 @@ do
                         end
                     end
 
+                    -- skill checks: always hit at the real moment the wheel is in the zone (no forged
+                    -- rotation, no early commit), exactly like a very precise player
                     local line, obj, perfectOnly = readCheck()
                     if line then
                         local goalRot = obj.Rotation
                         if cycleGoal == nil or math.abs(goalRot - cycleGoal) > 0.5 then
-                            cycleGoal, pressed, prevRel, prevTime = goalRot, false, nil, nil
+                            cycleGoal, pressed, prevRel = goalRot, false, nil
                             local mode = _G.Ox.Auto.SkillCheckMode
                             if mode == "Random" then
                                 mode = math.random() < 0.5 and "Instant" or "Normal"
@@ -12808,43 +12955,22 @@ do
                         local rel = (line.Rotation - goalRot) % 360
                         local perfectWanted = perfectOnly or cycleMode ~= "Normal"
 
-                        if not pressed then
-                            if cycleMode == "Instant" then
-                                line.Rotation = goalRot + (perfectWanted and 103 or 124)
+                        if not pressed and prevRel then
+                            local delta = rel - prevRel
+                            if delta < 0 then
+                                delta += 360
+                            end
+                            local ahead = rel + delta
+                            local lo, hi = 102, 116
+                            if not perfectWanted then
+                                lo, hi = 117, 139
+                            end
+                            if ahead >= lo + 1 and ahead <= hi - 1 and rel < hi then
                                 pressed = true
                                 tapSkillKey()
-                            elseif prevRel then
-                                local delta = rel - prevRel
-                                if delta < 0 then
-                                    delta += 360
-                                end
-                                local ahead = rel + delta
-                                local lo, hi = 102, 116
-                                if not perfectWanted then
-                                    lo, hi = 117, 139
-                                end
-                                if ahead >= lo + 1 and ahead <= hi - 1 and rel < hi then
-                                    pressed = true
-                                    tapSkillKey()
-                                end
-                            end
-                            if pressed and perfectWanted then
-                                perfects += 1
                             end
                         end
-                        prevRel, prevTime = rel, now
-
-                        -- Instant: once the +8s bonus is full, ask the server to finish right away
-                        if cycleMode == "Instant" and perfects >= 8 and not earlySent and freeTrap then
-                            earlySent = true
-                            task.delay(0.15, function()
-                                if alive() then
-                                    pcall(function()
-                                        freeTrap:FireServer("commit")
-                                    end)
-                                end
-                            end)
-                        end
+                        prevRel = rel
                     else
                         cycleGoal = nil
                     end
@@ -12852,10 +12978,7 @@ do
                     RunService.Heartbeat:Wait()
                 end
             end)
-            if TrapBot.holding then
-                sendBind("kb_interact", "MouseButton1", false)
-                TrapBot.holding = false
-            end
+            releaseInteract()
             task.wait(0.6)
             TrapBot.running = false
         end)
@@ -12881,6 +13004,199 @@ do
         _G.Ox.Auto.SkillCheckMode = skillCheckMode
         _G.Ox.State.RandomMode_IsNormal = false
     end, {Flag = "SkillCheckMode"})
+
+    -- Auto Help Trap Team: mirrors the game's TrapAssist client
+    -- begin(model) -> stay within 8 studs for 7s -> commit. Rejections are avoided by checking
+    -- the same conditions the game checks (target Trapped & not BeingRescued, helper not busy, range).
+    do
+        local Help = {on = false, range = 80, home = true, busy = false, rejectedAt = 0, skip = {}}
+
+        local function assistRemote()
+            local r = ReplicatedStorage:FindFirstChild("Remotes")
+            local k = r and r:FindFirstChild("Killers")
+            local b = k and k:FindFirstChild("Butcher")
+            return b and b:FindFirstChild("AssistFree")
+        end
+
+        task.spawn(function()
+            local rem
+            while _G.Ox.ScriptAlive and not rem do
+                rem = assistRemote()
+                task.wait(0.5)
+            end
+            if rem then
+                rem.OnClientEvent:Connect(function(msg)
+                    if msg == "rejected" then
+                        Help.rejectedAt = os.clock()
+                    end
+                end)
+            end
+        end)
+
+        local function helperEligible()
+            local char = localPlayer.Character
+            if not char then
+                return false
+            end
+            if char:GetAttribute("Trapped") or char:GetAttribute("Knocked") or char:GetAttribute("IsHooked") or char:GetAttribute("IsCarried") then
+                return false
+            end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then
+                return false
+            end
+            local root = char:FindFirstChild("HumanoidRootPart")
+            return root ~= nil and not root:HasTag("doing action")
+        end
+
+        local function pickTarget()
+            local char = localPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then
+                return nil
+            end
+            local best, bestDist = nil, Help.range
+            for _, m in ipairs(CollectionService:GetTagged("Survivor")) do
+                if m ~= char and m:GetAttribute("Trapped") and not m:GetAttribute("BeingRescued")
+                    and (Help.skip[m] or 0) < os.clock() then
+                    local r = m:FindFirstChild("HumanoidRootPart")
+                    if r then
+                        local d = (r.Position - root.Position).Magnitude
+                        if d <= bestDist then
+                            best, bestDist = m, d
+                        end
+                    end
+                end
+            end
+            return best
+        end
+
+        local function trapPosition(target)
+            local leg = target:FindFirstChild("Right Leg")
+            if leg then
+                for _, trap in ipairs(CollectionService:GetTagged("BearTrap")) do
+                    local cube = trap:FindFirstChild("Cube")
+                    local joint = cube and cube:FindFirstChild("TrapLeg")
+                    if joint and joint.Part0 == leg then
+                        return cube.Position
+                    end
+                end
+                return leg.Position
+            end
+            local r = target:FindFirstChild("HumanoidRootPart")
+            return r and r.Position
+        end
+
+        local function helpOne(target)
+            local rem = assistRemote()
+            local char = localPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local tRoot = target:FindFirstChild("HumanoidRootPart")
+            local pos = trapPosition(target)
+            if not (rem and hum and root and tRoot and pos) then
+                return
+            end
+
+            local Walk = _G.Ox.Walk
+            local home = root.Position
+            local moved = false
+
+            local function targetFree()
+                return Help.on and _G.Ox.ScriptAlive and target.Parent ~= nil and target:GetAttribute("Trapped")
+                    and not target:GetAttribute("BeingRescued") and helperEligible() and root.Parent ~= nil
+            end
+
+            local function walkHome()
+                if moved and Help.home and root.Parent and helperEligible() then
+                    Walk.to(home, {stop = 3, timeout = 40, owner = "help", prio = 3, alive = function()
+                        return _G.Ox.ScriptAlive and root.Parent ~= nil and helperEligible()
+                    end})
+                end
+            end
+
+            -- walk next to the trap on a real path (no teleport), inside the game's 8 stud assist range
+            if (root.Position - tRoot.Position).Magnitude > 5 then
+                moved = true
+                local result = Walk.to(pos, {stop = 4.5, timeout = 45, alive = targetFree, owner = "help", prio = 3})
+                if result ~= "reached" then
+                    if result == "nopath" or result == "stuck" or result == "timeout" then
+                        Help.skip[target] = os.clock() + 10
+                    end
+                    walkHome()
+                    return
+                end
+            end
+
+            local function stillValid()
+                return targetFree() and (root.Position - tRoot.Position).Magnitude <= 7
+            end
+
+            if not stillValid() then
+                walkHome()
+                return
+            end
+
+            local startedAt = os.clock()
+            rem:FireServer("begin", target)
+            hum.AutoRotate = false
+            root.Anchored = true
+            char:SetAttribute("overridelookscript", true)
+
+            local ok = true
+            while os.clock() - startedAt < 7.05 do
+                task.wait(0.1)
+                if Help.rejectedAt > startedAt or not stillValid() then
+                    ok = false
+                    break
+                end
+            end
+
+            if ok then
+                rem:FireServer("commit")
+            else
+                rem:FireServer("cancel")
+                Help.skip[target] = os.clock() + 3
+            end
+
+            if root.Parent then
+                root.Anchored = false
+            end
+            hum.AutoRotate = true
+            char:SetAttribute("overridelookscript", false)
+            task.wait(0.2)
+            walkHome()
+        end
+
+        task.spawn(function()
+            while _G.Ox.ScriptAlive do
+                task.wait(0.3)
+                if Help.on and not Help.busy and helperEligible()
+                    and localPlayer.Team and localPlayer.Team.Name ~= "Killer" then
+                    local target = pickTarget()
+                    if target and _G.Ox.Walk.try("help", 3) then
+                        Help.busy = true
+                        pcall(helpOne, target)
+                        Help.busy = false
+                        _G.Ox.Walk.free("help")
+                        task.wait(0.5)
+                    end
+                end
+            end
+        end)
+
+        GenCard:AddToggle("Auto Help Trap Team", false, function(v)
+            Help.on = v
+        end, {Flag = "AutoHelpTrapTeam"})
+
+        GenCard:AddSlider("Help Trap Range", 10, 200, 80, function(v)
+            Help.range = v
+        end, {Flag = "AutoHelpTrapRange"})
+
+        GenCard:AddToggle("Return After Help", true, function(v)
+            Help.home = v
+        end, {Flag = "AutoHelpTrapReturn"})
+    end
 
     GenCard:AddDropdown("Gen Boost Mode", {"Manual Repair", "Auto Repair"}, false, function(bypassGenMode)
         _G.Ox.BypassGenMode = bypassGenMode
@@ -14058,80 +14374,169 @@ SelfHealToggle:AddKeyPicker("None")
 -- ===== Heal & Bandage =====
 do
     local HealCard = S_Page:CreateSection("Heal & Bandage", "heart-pulse")
-    local H = {team = false, teleport = true, bandage = false}
+    local H = {team = false, range = 40, bandage = false, skip = {}}
 
-    local function hurtTeammates()
-        local list = {}
+    local CSH = game:GetService("CollectionService")
+    local HEAL_REACH = 3.2 -- the game's heal point radius is 4 (+1); stand well inside it, no line of sight needed under 3.5
+    local HEAL_DUMMY_TAGS = {"VDHealTestDummy", "SurvivorBot"}
+
+    local function selfBlocked(char)
+        return char:GetAttribute("Trapped") or char:GetAttribute("IsHooked") or char:GetAttribute("IsCarried")
+            or char:GetAttribute("Knocked") or false
+    end
+
+    local function selfBusy(char)
+        if selfBlocked(char) then
+            return true
+        end
+        local ci = char:FindFirstChild("CheckInterractable")
+        return ci ~= nil and (ci:GetAttribute("isHealing") or ci:GetAttribute("isRepairing") or ci:GetAttribute("isVaulting")
+            or ci:GetAttribute("isSliding") or ci:GetAttribute("isUnhooking") or ci:GetAttribute("isExiting")) or false
+    end
+
+    -- same candidates the game looks at: every player character (+ the game's heal dummies/bots)
+    local function healCharacters()
+        local list, seen = {}, {}
         for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= localPlayer and plr.Team and plr.Team.Name == "Survivors" and plr.Character then
-                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-                local root = plr.Character:FindFirstChild("HumanoidRootPart")
-                if hum and root and hum.Health > 0 and hum.Health < hum.MaxHealth then
-                    table.insert(list, {hum = hum, root = root})
+            local ch = plr.Character
+            if plr ~= localPlayer and ch and not (plr.Team and plr.Team.Name == "Killer") then
+                seen[ch] = true
+                list[#list + 1] = ch
+            end
+        end
+        for _, tag in ipairs(HEAL_DUMMY_TAGS) do
+            for _, m in ipairs(CSH:GetTagged(tag)) do
+                if m:IsA("Model") and m:IsDescendantOf(workspace) and not seen[m] then
+                    seen[m] = true
+                    list[#list + 1] = m
                 end
             end
         end
-        table.sort(list, function(a, b)
-            return a.hum.Health < b.hum.Health
-        end)
         return list
     end
 
-    HealCard:AddToggle("Heal Team (Any Distance)", false, function(v)
+    -- the game only lets you heal a character whose root has CanGetHealed == true, who is alive,
+    -- not hooked/carried, and neither of you is in the middle of another action
+    local function canHeal(ch)
+        local r = ch:FindFirstChild("HumanoidRootPart")
+        local h = ch:FindFirstChildOfClass("Humanoid")
+        if not (r and h) or h.Health <= 0 or not ch:IsDescendantOf(workspace) then
+            return nil
+        end
+        if r:GetAttribute("CanGetHealed") ~= true or r:HasTag("doing action")
+            or ch:GetAttribute("IsHooked") or ch:GetAttribute("IsCarried") or ch:GetAttribute("Trapped") then
+            return nil
+        end
+        return r, h
+    end
+
+    local function pickHealTarget(myRoot)
+        local best, bestDist = nil, H.range
+        for _, ch in ipairs(healCharacters()) do
+            if (H.skip[ch] or 0) < os.clock() then
+                local r = canHeal(ch)
+                if r then
+                    local d = (r.Position - myRoot.Position).Magnitude
+                    if d <= bestDist then
+                        best, bestDist = ch, d
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    local function healOne(target, myChar)
+        local Walk = _G.Ox.Walk
+        local tRoot, tHum = canHeal(target)
+        if not tRoot then
+            return
+        end
+
+        local function targetOk()
+            local c = localPlayer.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            return H.team and _G.Ox.ScriptAlive and c == myChar and r ~= nil and not selfBusy(c) and not r:HasTag("doing action")
+                and canHeal(target) ~= nil and tHum.Health < tHum.MaxHealth
+        end
+
+        -- once healing has started the game tags both characters as "doing action", so keep-going
+        -- only checks that nothing actually interrupted the heal
+        local function keepOk()
+            local c = localPlayer.Character
+            return H.team and _G.Ox.ScriptAlive and c == myChar and c ~= nil and not selfBlocked(c)
+                and target.Parent ~= nil and tHum.Health > 0 and tHum.Health < tHum.MaxHealth
+                and not target:GetAttribute("IsHooked") and not target:GetAttribute("IsCarried")
+                and not target:GetAttribute("Trapped")
+        end
+
+        for _ = 1, 4 do
+            local result = Walk.to(tRoot.Position, {
+                stop = HEAL_REACH,
+                timeout = 35,
+                alive = targetOk,
+                owner = "heal",
+                prio = 2,
+                follow = function()
+                    return tRoot.Parent and tRoot.Position or nil
+                end,
+            })
+            if result ~= "reached" then
+                H.skip[target] = os.clock() + ((result == "nopath" or result == "stuck" or result == "timeout") and 10 or 1.5)
+                return
+            end
+
+            -- standing still next to them, start healing the way the game does
+            local myRoot = myChar:FindFirstChild("HumanoidRootPart")
+            if not (myRoot and targetOk()) then
+                return
+            end
+            local flat = Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z)
+            if (flat - myRoot.Position).Magnitude > 0.1 then
+                myRoot.CFrame = CFrame.lookAt(myRoot.Position, flat) -- rotate only
+            end
+            _G.Ox.Net.heal(tRoot, true)
+            local t0 = tick()
+            local keep = true
+            while keep and tick() - t0 < 20 do
+                task.wait(0.2)
+                if not keepOk() then
+                    keep = false
+                elseif (tRoot.Position - myRoot.Position).Magnitude > 4.8 then
+                    break -- they walked off: stop, then follow them again
+                end
+            end
+            _G.Ox.Net.heal(tRoot, false)
+            if not keep or tHum.Health >= tHum.MaxHealth or tick() - t0 >= 20 then
+                return
+            end
+            task.wait(0.15)
+        end
+    end
+
+    HealCard:AddToggle("Heal Team (Nearby)", false, function(v)
         H.team = v
     end, {Flag = "HealTeam"})
 
-    HealCard:AddToggle("Teleport If Out Of Range", true, function(v)
-        H.teleport = v
-    end, {Flag = "HealTeamTeleport"})
+    HealCard:AddSlider("Heal Search Range", 10, 150, 40, function(v)
+        H.range = v
+    end, {Flag = "HealTeamRange"})
 
     task.spawn(function()
         while _G.Ox.ScriptAlive do
-            task.wait(0.4)
+            task.wait(0.3)
             if H.team and localPlayer.Team and localPlayer.Team.Name ~= "Killer" then
-                pcall(function()
-                    for _, entry in ipairs(hurtTeammates()) do
-                        if not H.team then
-                            break
-                        end
-                        local hum, root = entry.hum, entry.root
-                        local before = hum.Health
-                        _G.Ox.Net.heal(root, true)
-                        local t0 = tick()
-                        local gained = false
-                        while tick() - t0 < 1.8 and H.team and hum.Health > 0 and hum.Health < hum.MaxHealth do
-                            task.wait(0.1)
-                            if hum.Health > before + 0.01 then
-                                gained = true
-                                break
-                            end
-                        end
-                        if not gained and H.team and H.teleport and hum.Health > 0 and hum.Health < hum.MaxHealth then
-                            local myRoot = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-                            if myRoot and root.Parent then
-                                local home = myRoot.CFrame
-                                myRoot.CFrame = root.CFrame * CFrame.new(0, 0, 3)
-                                task.wait(0.15)
-                                _G.Ox.Net.heal(root, false)
-                                _G.Ox.Net.heal(root, true)
-                                local t1 = tick()
-                                while tick() - t1 < 10 and H.team and hum.Health > 0 and hum.Health < hum.MaxHealth do
-                                    task.wait(0.2)
-                                end
-                                _G.Ox.Net.heal(root, false)
-                                myRoot.CFrame = home
-                                gained = nil
-                            end
-                        end
-                        if gained then
-                            local t2 = tick()
-                            while tick() - t2 < 15 and H.team and hum.Health > 0 and hum.Health < hum.MaxHealth do
-                                task.wait(0.2)
-                            end
-                            _G.Ox.Net.heal(root, false)
-                        end
+                local char = localPlayer.Character
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+                -- the game heals yourself first when you are at 50 HP or below; Self Heal covers that case
+                if hum and myRoot and hum.Health > 50 and not selfBusy(char) and not myRoot:HasTag("doing action") then
+                    local target = pickHealTarget(myRoot)
+                    if target and _G.Ox.Walk.try("heal", 2) then
+                        pcall(healOne, target, char)
+                        _G.Ox.Walk.free("heal")
                     end
-                end)
+                end
             end
         end
     end)
@@ -14147,9 +14552,11 @@ do
         H.bandage = v
     end, {Flag = "InfiniteBandage"})
 
+    local bandageId = 0
     task.spawn(function()
+        -- mirrors BandageClient: Fire(true, tool, requestId) starts, Fire(false, tool, sameId) stops.
         while _G.Ox.ScriptAlive do
-            task.wait(0.45)
+            task.wait(0.3)
             if H.bandage and localPlayer.Team and localPlayer.Team.Name ~= "Killer" then
                 pcall(function()
                     local char = localPlayer.Character
@@ -14157,8 +14564,17 @@ do
                     local inst = bandageInstance()
                     local r = ReplicatedStorage:FindFirstChild("Remotes")
                     local fire = r and r:FindFirstChild("Items") and r.Items:FindFirstChild("Bandage") and r.Items.Bandage:FindFirstChild("Fire")
-                    if hum and hum.Health > 0 and hum.Health < hum.MaxHealth and inst and fire then
-                        fire:FireServer(true, inst, 1)
+                    if hum and hum.Health > 0 and hum.Health < hum.MaxHealth and inst and fire
+                        and not char:GetAttribute("IsCarried") and not char:GetAttribute("IsHooked") then
+                        bandageId += 1
+                        local id = bandageId
+                        fire:FireServer(true, inst, id)
+                        local t0 = tick()
+                        while H.bandage and tick() - t0 < 1.2 and hum.Health > 0 and hum.Health < hum.MaxHealth do
+                            task.wait(0.1)
+                        end
+                        fire:FireServer(false, inst, id)
+                        task.wait(0.15)
                     end
                 end)
             end
@@ -14551,7 +14967,7 @@ do
                 end)
             end
         end)
-    end, {Flag = "NOX_AutoUnhook"})
+    end, {Flag = "MeowX_AutoUnhook"})
 
     -- ===== Teleport to hooked survivor (+ unhook, then return) =====
     local returnBack, returnDelay, tpBusy = true, 600, false
@@ -14616,10 +15032,10 @@ do
     end)
     Card:AddToggle("Kembali ke Posisi Awal", true, function(v)
         returnBack = v
-    end, {Flag = "NOX_UnhookReturn"})
+    end, {Flag = "MeowX_UnhookReturn"})
     Card:AddSlider("Return Delay (ms)", 200, 2000, 600, function(v)
         returnDelay = v
-    end, {Increment = 50, Flag = "NOX_UnhookReturnDelay"})
+    end, {Increment = 50, Flag = "MeowX_UnhookReturnDelay"})
 end
 
 local Killer = v:CreateTab("Killer", false, false)
@@ -15166,7 +15582,7 @@ do
         end
     end
 
-    KA:AddToggle("Anti Pallet Stun", false, setAntiStun, {Flag = "NOX_AntiPalletStun"})
+    KA:AddToggle("Anti Pallet Stun", false, setAntiStun, {Flag = "MeowX_AntiPalletStun"})
 end
 
 do
@@ -15405,14 +15821,14 @@ do
         end
     end)
 
-    KAuto:AddToggle("Auto Carry (Downed)", false, function(v) S.carry = v end, {Flag = "NOX_AutoCarry"})
-    KAuto:AddToggle("Auto Hook (Carried)", false, function(v) S.hook = v end, {Flag = "NOX_AutoHook"})
-    KAuto:AddToggle("Auto Break Generator", false, function(v) S.gen = v end, {Flag = "NOX_AutoBreakGen"})
-    KAuto:AddToggle("Auto Break Pallet", false, function(v) S.pallet = v end, {Flag = "NOX_AutoBreakPallet"})
-    KAuto:AddToggle("Auto Attack (Aura)", false, function(v) S.attack = v end, {Flag = "NOX_AutoAttack"})
-    KAuto:AddToggle("Return To Position", true, function(v) S.ret = v end, {Flag = "NOX_AutoReturn"})
-    KAuto:AddSlider("Auto Range (studs)", 20, 300, 120, function(v) S.range = v end, {Increment = 5, Flag = "NOX_AutoRange"})
-    KAuto:AddSlider("Attack Range", 4, 15, 8, function(v) S.atkRange = v end, {Increment = 1, Flag = "NOX_AtkRange"})
+    KAuto:AddToggle("Auto Carry (Downed)", false, function(v) S.carry = v end, {Flag = "MeowX_AutoCarry"})
+    KAuto:AddToggle("Auto Hook (Carried)", false, function(v) S.hook = v end, {Flag = "MeowX_AutoHook"})
+    KAuto:AddToggle("Auto Break Generator", false, function(v) S.gen = v end, {Flag = "MeowX_AutoBreakGen"})
+    KAuto:AddToggle("Auto Break Pallet", false, function(v) S.pallet = v end, {Flag = "MeowX_AutoBreakPallet"})
+    KAuto:AddToggle("Auto Attack (Aura)", false, function(v) S.attack = v end, {Flag = "MeowX_AutoAttack"})
+    KAuto:AddToggle("Return To Position", true, function(v) S.ret = v end, {Flag = "MeowX_AutoReturn"})
+    KAuto:AddSlider("Auto Range (studs)", 20, 300, 120, function(v) S.range = v end, {Increment = 5, Flag = "MeowX_AutoRange"})
+    KAuto:AddSlider("Attack Range", 4, 15, 8, function(v) S.atkRange = v end, {Increment = 1, Flag = "MeowX_AtkRange"})
 end
 
 local Visual = v:CreateTab("Visual", false, false)
