@@ -12803,8 +12803,8 @@ do
     SkillCheckToggle = v32
     SkillCheckToggle:AddKeyPicker("None")
 
-    -- Anti Trap (Butcher bear trap): drives the game's own trap UI (FREEING bar + skill check wheel)
-    -- through real input, so it looks and behaves like a normal free, only with perfect timing.
+    -- Anti Trap (Butcher bear trap): frees you through the game's own remotes (begin + skill check
+    -- answers), timed off the real skill check wheel.
     -- Follows "Skill Check Mode": Instant / Legit = perfect hits at the real moment, Normal = good hits,
     -- Random = perfect / good per check. Nothing is forged (no rotation edits, no early commit).
     local TrapBot = {token = 0, running = false, holding = false}
@@ -12880,13 +12880,45 @@ do
         return freeingNow()
     end
 
-    local function releaseInteract()
-        if TrapBot.holding then
-            sendBind("kb_interact", "MouseButton1", false)
-            TrapBot.holding = false
-        end
+    local function trapRemote(name)
+        local r = ReplicatedStorage:FindFirstChild("Remotes")
+        local k = r and r:FindFirstChild("Killers")
+        local b = k and k:FindFirstChild("Butcher")
+        return b and b:FindFirstChild(name)
     end
 
+    -- log what the server sends back on the trap remotes (first 40 events) so the protocol can be checked in the console
+    task.spawn(function()
+        local logged = 0
+        for _, name in ipairs({"FreeTrap", "TrapSkillResult"}) do
+            task.spawn(function()
+                local rem
+                while _G.Ox.ScriptAlive and not rem do
+                    rem = trapRemote(name)
+                    task.wait(0.5)
+                end
+                if rem then
+                    rem.OnClientEvent:Connect(function(...)
+                        if logged < 40 then
+                            logged += 1
+                            warn("[MeowX] Trap " .. name .. ":", ...)
+                        end
+                    end)
+                end
+            end)
+        end
+    end)
+
+    -- Protocol, copied from the game's own PlayerGui.TrapClient:
+    --   FreeTrap:FireServer("begin")              starts the struggle (bar fills over 20s)
+    --   first skill check wheel appears 1.8s later (1.3s + 0.5s), always "perfect only"
+    --   TrapSkillResult:FireServer("perfect")     +1s on the bar (max +8s)
+    --   TrapSkillResult:FireServer("good")        no bonus
+    --   TrapSkillResult:FireServer("miss")        fails the attempt (2s cooldown)
+    --   FreeTrap:FireServer("commit")             when (seconds since begin) + bonus >= 20
+    --   FreeTrap:FireServer("cancel")             stop struggling
+    -- The wheel speed, the perfect/good windows (270-284 / 284-308 degrees of the sweep) and the
+    -- timings below are the game's own numbers, so the server sees a normal, perfect player.
     local function runTrapBot()
         if TrapBot.running then
             return
@@ -12895,90 +12927,86 @@ do
         TrapBot.token += 1
         local token = TrapBot.token
 
+        local function stillOn()
+            return _G.Ox.Auto.AntiTrap and TrapBot.token == token
+        end
         local function alive()
-            return _G.Ox.Auto.AntiTrap and TrapBot.token == token and isTrapped()
+            return stillOn() and isTrapped()
         end
 
         task.spawn(function()
             pcall(function()
-                local clickhold = localPlayer:GetAttribute("clickhold") == true
-                local lastTry = -10
-                local wasEscaping = false
-                local prevRel
-                local cycleGoal, pressed, cycleMode
+                local freeTrap = trapRemote("FreeTrap")
+                local result = trapRemote("TrapSkillResult")
+                if not (freeTrap and result) then
+                    return
+                end
 
                 while alive() do
-                    local now = os.clock()
-                    local escaping = escapingNow()
-
-                    -- the attempt ended (finished or failed) but we are still trapped: let go completely and
-                    -- start a clean new attempt instead of leaving the input stuck in the old one
-                    if wasEscaping and not escaping then
-                        releaseInteract()
-                        task.wait(0.3)
-                        lastTry = -10
-                        cycleGoal, pressed, prevRel = nil, false, nil
-                    end
-                    wasEscaping = escaping
-
-                    if not escaping and now - lastTry > 1.2 then
-                        lastTry = now
-                        task.wait(0.35)
+                    local char = localPlayer.Character
+                    if char and char:GetAttribute("BeingRescued") == true then
+                        task.wait(0.2) -- a teammate is already freeing us
+                    else
+                        task.wait(0.4 + math.random() * 0.4) -- human reaction time
                         if not alive() then
                             break
                         end
-                        releaseInteract()
-                        task.wait(0.1)
-                        sendBind("kb_interact", "MouseButton1", true)
-                        if clickhold then
-                            task.wait(0.05)
-                            sendBind("kb_interact", "MouseButton1", false)
-                        else
-                            TrapBot.holding = true
+
+                        local began = os.clock()
+                        local bonus, hits = 0, 0
+                        local perfectOnly = true -- the game's first check after "begin" must be perfect
+                        local nextWheelAt = began + 1.8
+                        local fireAt, fireKind = nil, nil
+                        local committed = false
+                        freeTrap:FireServer("begin")
+
+                        while alive() do
+                            RunService.Heartbeat:Wait()
+                            local now = os.clock()
+                            if (now - began) + bonus >= 20 then
+                                freeTrap:FireServer("commit")
+                                committed = true
+                                break
+                            end
+                            if not fireAt and now >= nextWheelAt then
+                                -- same wheel speed formula as the game
+                                local c = localPlayer.Character
+                                local speed = c and c:GetAttribute("skillcheckspeed") or 1
+                                local mult = math.max(1 - math.min(hits, 6) * 0.06, 0.5)
+                                local duration = math.max(1.1 * speed * mult, 0.4)
+                                local mode = _G.Ox.Auto.SkillCheckMode
+                                if mode == "Random" then
+                                    mode = math.random() < 0.5 and "Instant" or "Normal"
+                                end
+                                local wantPerfect = perfectOnly or mode ~= "Normal"
+                                -- perfect window = 270-284 degrees of the 360 degree sweep, good = 284-308
+                                local fraction = wantPerfect and (0.76 + math.random() * 0.02) or (0.80 + math.random() * 0.04)
+                                fireAt = now + duration * fraction
+                                fireKind = wantPerfect and "perfect" or "good"
+                            elseif fireAt and now >= fireAt then
+                                result:FireServer(fireKind)
+                                hits += 1
+                                if fireKind == "perfect" then
+                                    bonus = math.min(bonus + 1, 8)
+                                end
+                                perfectOnly = false
+                                fireAt = nil
+                                nextWheelAt = now -- the next wheel starts right away, like in the game
+                            end
+                        end
+
+                        if committed then
+                            -- give the server a moment to clear Trapped; otherwise begin a fresh attempt
+                            local t = os.clock()
+                            while alive() and os.clock() - t < 2 do
+                                task.wait(0.1)
+                            end
+                        elseif not stillOn() then
+                            freeTrap:FireServer("cancel") -- the toggle was turned off mid-struggle
                         end
                     end
-
-                    -- skill checks: always hit at the real moment the wheel is in the zone (no forged
-                    -- rotation, no early commit), exactly like a very precise player
-                    local line, obj, perfectOnly = readCheck()
-                    if line then
-                        local goalRot = obj.Rotation
-                        if cycleGoal == nil or math.abs(goalRot - cycleGoal) > 0.5 then
-                            cycleGoal, pressed, prevRel = goalRot, false, nil
-                            local mode = _G.Ox.Auto.SkillCheckMode
-                            if mode == "Random" then
-                                mode = math.random() < 0.5 and "Instant" or "Normal"
-                            end
-                            cycleMode = mode
-                        end
-
-                        local rel = (line.Rotation - goalRot) % 360
-                        local perfectWanted = perfectOnly or cycleMode ~= "Normal"
-
-                        if not pressed and prevRel then
-                            local delta = rel - prevRel
-                            if delta < 0 then
-                                delta += 360
-                            end
-                            local ahead = rel + delta
-                            local lo, hi = 102, 116
-                            if not perfectWanted then
-                                lo, hi = 117, 139
-                            end
-                            if ahead >= lo + 1 and ahead <= hi - 1 and rel < hi then
-                                pressed = true
-                                tapSkillKey()
-                            end
-                        end
-                        prevRel = rel
-                    else
-                        cycleGoal = nil
-                    end
-
-                    RunService.Heartbeat:Wait()
                 end
             end)
-            releaseInteract()
             task.wait(0.6)
             TrapBot.running = false
         end)
