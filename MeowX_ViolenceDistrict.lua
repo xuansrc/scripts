@@ -1073,22 +1073,9 @@ do
         end
     end
 
+    -- Auto Parry (V1) now fires the exact same single parry as V2 (one parry:FireServer, same checks)
     ExecuteParry = function()
-        if _G.Ox.State.ParryCooldown then
-            return
-        end
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        local items = remotes and remotes:FindFirstChild("Items")
-        local parryingDagger = items and items:FindFirstChild("Parrying Dagger")
-        local parry = parryingDagger and parryingDagger:FindFirstChild("parry")
-
-        if parry then
-            for i = 1, 8 do
-                parry:FireServer(localPlayer.Character)
-            end
-        end
-
-        task.spawn(tapMobileParryButton)
+        V2_DoParry(true)
     end
 
     ParryHUD.Scan = function()
@@ -1246,33 +1233,8 @@ do
         end
     end)
 
-    ListenToParryResult = function()
-        task.spawn(function()
-            local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
-            local parryingDagger = remotes and remotes:WaitForChild("Items", 5):WaitForChild("Parrying Dagger", 5)
-            local parryResult = parryingDagger and parryingDagger:WaitForChild("parryResult", 5)
-
-            if parryResult then
-                parryResult.OnClientEvent:Connect(function(arg, arg2)
-                    local num = tonumber(arg2)
-                    local n = num or (arg == true and 90 or 60)
-                    _G.Ox.State.ParryCooldown = true
-
-                    if _G.Ox.State.ParryCooldownThread then
-                        task.cancel(_G.Ox.State.ParryCooldownThread)
-                    end
-
-                    ParryHUD.SetColor(Color3.fromRGB(77, 77, 77))
-                    ParryHUD.Tween(n)
-
-                    _G.Ox.State.ParryCooldownThread = task.delay(n, function()
-                        _G.Ox.State.ParryCooldown = false
-                        ParryHUD.SetColor(Color3.fromRGB(255, 255, 255))
-                    end)
-                end)
-            end
-        end)
-    end
+    -- the cooldown now comes from the shared V2 parryResult handler (real values from the server)
+    ListenToParryResult = function() end
 
     ListenToParryResult()
 
@@ -1499,6 +1461,10 @@ do
             return true
         end
 
+        if character:GetAttribute("Trapped") then
+            return true
+        end
+
         if character:GetAttribute("IsCarried") then
             return true
         end
@@ -1559,9 +1525,11 @@ do
         return flag2
     end
 
-    V2_CanParry = function()
+    -- mirrors ParryClient:CanUse(): equipped dagger, not silenced, no cooldown / pending result,
+    -- not busy (trapped, carried, hooked, vaulting, repairing, healing ...) and health >= 50%
+    V2_CanParry = function(force)
         local parryV2 = _G.Ox.ParryV2
-        if not parryV2.Enabled then
+        if not parryV2.Enabled and not force then
             return false
         end
 
@@ -1569,28 +1537,23 @@ do
             return false
         end
 
-        if parryV2.IsOnCooldown then
+        if parryV2.IsOnCooldown or parryV2.IsResolving then
             return false
         end
 
-        if parryV2.IsResolving then
-            return false
-        end
-
-        -- game's ParryClient refuses while Silenced / dead
         local char = localPlayer.Character
         if (char and CollectionService:HasTag(char, "Silenced")) or localPlayer:GetAttribute("IsDead") then
             return false
         end
 
-        if parryV2.SafetyParry and V2_IsBusy() then
+        if V2_IsBusy() then
             return false
         end
 
-        if not V2_IsLowHealth() then
-            return true
+        if V2_IsLowHealth() then
+            return false
         end
-        return false
+        return true
     end
 
     V2_HasLOS = function(arg)
@@ -1815,6 +1778,7 @@ do
         local cooldownToken = parryV2.CooldownToken
         parryV2.IsResolving = false
         parryV2.IsOnCooldown = true
+        _G.Ox.State.ParryCooldown = true
         V2_SetIconsColor(Color3.fromRGB(77, 77, 77))
         V2_PlayCooldownTween(arg)
 
@@ -1825,6 +1789,7 @@ do
         parryV2.CooldownThread = task.delay(arg, function()
             if parryV2.CooldownToken == cooldownToken then
                 parryV2.IsOnCooldown = false
+                _G.Ox.State.ParryCooldown = false
                 V2_SetIconsColor(Color3.fromRGB(255, 255, 255))
                 parryV2.CooldownThread = nil
             end
@@ -1839,9 +1804,25 @@ do
             parryV2.CooldownThread = nil
         end
 
+        parryV2.CooldownToken = parryV2.CooldownToken + 1
         parryV2.IsOnCooldown = false
         parryV2.IsResolving = false
+        _G.Ox.State.ParryCooldown = false
         V2_SetIconsColor(Color3.fromRGB(255, 255, 255))
+    end
+
+    -- "permanent" cooldown: stays until the server chains it (parryResult chained = true)
+    V2_StartPermanentCooldown = function()
+        local parryV2 = _G.Ox.ParryV2
+        parryV2.CooldownToken = parryV2.CooldownToken + 1
+        if parryV2.CooldownThread then
+            task.cancel(parryV2.CooldownThread)
+            parryV2.CooldownThread = nil
+        end
+        parryV2.IsResolving = false
+        parryV2.IsOnCooldown = true
+        _G.Ox.State.ParryCooldown = true
+        V2_SetIconsColor(Color3.fromRGB(77, 77, 77))
     end
 
     V2_FaceLookDirection = function()
@@ -2042,69 +2023,91 @@ do
         end)
     end
 
-    V2_DoParry = function()
-        if not V2_CanParry() then
+    -- mirrors ParryClient:Parry(): ONE parry:FireServer(character), then the same client side effects
+    -- (face the camera, parry animation, "doing action" tag, slow) and the same clean up when it ends.
+    -- The cooldown is whatever the server answers in parryResult, there is no made up cooldown.
+    V2_DoParry = function(force)
+        if not V2_CanParry(force) then
             return
         end
         local parryV2 = _G.Ox.ParryV2
         parryV2.IsResolving = true
         V2_SetIconsColor(Color3.fromRGB(77, 77, 77))
-        local trigger = parryV2.Trigger
-        local str = trigger or "Remote"
         local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 
-        if str == "Button" then
+        if parryV2.Trigger == "Button" and not force then
             V2_TriggerByButton()
         else
+            local character = localPlayer.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            local hrp = character and character:FindFirstChild("HumanoidRootPart")
+            local autoRotate = humanoid and humanoid.AutoRotate
+            local landsBefore = character and character:GetAttribute("ParryLands") or 0
             local parryingDagger = remotes and remotes:FindFirstChild("Items") and remotes.Items:FindFirstChild("Parrying Dagger")
             local parry = parryingDagger and parryingDagger:FindFirstChild("parry")
+            local slow = remotes and remotes:FindFirstChild("Mechanics") and remotes.Mechanics:FindFirstChild("Slow")
 
             if parry then
                 pcall(function()
-                    parry:FireServer(localPlayer.Character)
+                    parry:FireServer(character)
                 end)
             end
 
             V2_FaceLookDirection()
-            local character = localPlayer.Character
-            local humanoid = character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
-
             if humanoid then
                 humanoid.AutoRotate = false
             end
-
             V2_PlayParryAnim()
-            local character2 = localPlayer.Character
-            local humanoidRootPart = character2 and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-
-            if humanoidRootPart then
+            if hrp then
                 pcall(function()
-                    CollectionService:AddTag(humanoidRootPart, "doing action")
+                    CollectionService:AddTag(hrp, "doing action")
                 end)
             end
-
-            local slow = remotes and remotes:FindFirstChild("Mechanics") and remotes.Mechanics:FindFirstChild("Slow")
-
             if slow then
                 pcall(function()
                     slow:Fire(0, 1, 0)
                 end)
             end
-        end
 
-        task.delay(2, function()
-            if parryV2.IsResolving then
-                parryV2.IsResolving = false
-                local n = parryV2.Trigger == "Button" and 1.2 or 60
-                V2_StartCooldown(n)
-                local character = localPlayer.Character
-                local humanoidRootPart = character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-
-                if humanoidRootPart then
+            task.spawn(function()
+                local track = parryV2.ParryTrack
+                if track then
+                    local deadline = os.clock() + math.max(track.Length + 2, 5)
+                    while track.IsPlaying and os.clock() < deadline and localPlayer.Character == character
+                        and (character:GetAttribute("ParryLands") or 0) == landsBefore do
+                        task.wait()
+                    end
+                end
+                if localPlayer.Character == character and landsBefore < (character:GetAttribute("ParryLands") or 0) then
+                    -- the parry landed: leave the parry pose like the game does
+                    if track and track.IsPlaying then
+                        pcall(function()
+                            track:Stop(0.15)
+                        end)
+                    end
+                    if slow then
+                        pcall(function()
+                            slow:Fire(1, 0)
+                        end)
+                    end
+                end
+                if localPlayer.Character == character and humanoid and autoRotate ~= nil
+                    and not (character:GetAttribute("IsCarried") or character:GetAttribute("IsHooked")) then
+                    humanoid.AutoRotate = autoRotate
+                end
+                if hrp and hrp.Parent then
                     pcall(function()
-                        CollectionService:RemoveTag(humanoidRootPart, "doing action")
+                        CollectionService:RemoveTag(hrp, "doing action")
                     end)
                 end
+            end)
+        end
+
+        -- failsafe only: if the server never answers, release our own lock (no made up cooldown)
+        task.delay(4, function()
+            if parryV2.IsResolving then
+                parryV2.IsResolving = false
+                V2_SetIconsColor(Color3.fromRGB(255, 255, 255))
             end
         end)
     end
@@ -2118,29 +2121,29 @@ do
             return
         end
 
-        parryResult.OnClientEvent:Connect(function(arg, arg2)
+        -- same arguments the game's ParryClient reads: (success, cooldown, permanent, chained, character)
+        parryResult.OnClientEvent:Connect(function(success, cooldown, permanent, chained, character)
             local parryV2 = _G.Ox.ParryV2
+            if character ~= localPlayer.Character then
+                return
+            end
+            if chained == true then
+                V2_ResetCooldown() -- the cooldown was cleared by a chained parry
+                return
+            end
             if not parryV2.IsResolving then
                 return
             end
-            parryV2.IsResolving = false
-            local num = tonumber(arg2)
-
-            if num and num > 0 then
-                V2_StartCooldown(num)
-            elseif arg == true then
-                V2_StartCooldown(90)
-            else
-                V2_StartCooldown(60)
+            if permanent == true then
+                V2_StartPermanentCooldown()
+                return
             end
-
-            local character = localPlayer.Character
-            local humanoidRootPart = character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-
-            if humanoidRootPart then
-                pcall(function()
-                    CollectionService:RemoveTag(humanoidRootPart, "doing action")
-                end)
+            local n = tonumber(cooldown)
+            if n and n > 0 then
+                V2_StartCooldown(n)
+            else
+                parryV2.IsResolving = false
+                V2_SetIconsColor(Color3.fromRGB(255, 255, 255))
             end
         end)
     end)
@@ -4589,48 +4592,6 @@ do
             _G.Ox.ProcessedGens[parent] = nil
             return
         end
-        local cFrame = humanoidRootPart.CFrame
-
-        pcall(function()
-            for k, v5 in pairs(v4) do
-                if v5 ~= arg and v5.Parent then
-                    humanoidRootPart.Anchored = true
-                    humanoidRootPart.CFrame = v5.CFrame
-                    task.wait(0.15)
-
-                    pcall(function()
-                        _G.Ox.Net.repair(v5, true)
-                    end)
-
-                    if not waitForRepairing(v5, 0.8) then
-                        pcall(function()
-                            _G.Ox.Net.repair(v5, false)
-                        end)
-
-                        task.wait(0.1)
-                        humanoidRootPart.CFrame = v5.CFrame
-                        task.wait(0.15)
-
-                        pcall(function()
-                            _G.Ox.Net.repair(v5, true)
-                        end)
-
-                        waitForRepairing(v5, 0.5)
-                    end
-
-                    humanoidRootPart.Anchored = false
-                    task.wait(0.05)
-                end
-            end
-        end)
-
-        pcall(function()
-            if humanoidRootPart and humanoidRootPart.Parent then
-                humanoidRootPart.Anchored = false
-                humanoidRootPart.CFrame = cFrame
-            end
-        end)
-
         task.wait(0.1)
 
         if _G.Ox.BypassGenMode == "Manual Repair" then
@@ -13037,7 +12998,7 @@ do
     -- begin(model) -> stay within 8 studs for 7s -> commit. Rejections are avoided by checking
     -- the same conditions the game checks (target Trapped & not BeingRescued, helper not busy, range).
     do
-        local Help = {on = false, range = 80, home = true, busy = false, rejectedAt = 0, skip = {}}
+        local Help = {on = false, range = 80, busy = false, rejectedAt = 0, skip = {}}
 
         local function assistRemote()
             local r = ReplicatedStorage:FindFirstChild("Remotes")
@@ -13127,31 +13088,19 @@ do
             end
 
             local Walk = _G.Ox.Walk
-            local home = root.Position
-            local moved = false
 
             local function targetFree()
                 return Help.on and _G.Ox.ScriptAlive and target.Parent ~= nil and target:GetAttribute("Trapped")
                     and not target:GetAttribute("BeingRescued") and helperEligible() and root.Parent ~= nil
             end
 
-            local function walkHome()
-                if moved and Help.home and root.Parent and helperEligible() then
-                    Walk.to(home, {stop = 3, timeout = 40, owner = "help", prio = 3, alive = function()
-                        return _G.Ox.ScriptAlive and root.Parent ~= nil and helperEligible()
-                    end})
-                end
-            end
-
             -- walk next to the trap on a real path (no teleport), inside the game's 8 stud assist range
             if (root.Position - tRoot.Position).Magnitude > 5 then
-                moved = true
                 local result = Walk.to(pos, {stop = 4.5, timeout = 45, alive = targetFree, owner = "help", prio = 3})
                 if result ~= "reached" then
                     if result == "nopath" or result == "stuck" or result == "timeout" then
                         Help.skip[target] = os.clock() + 10
                     end
-                    walkHome()
                     return
                 end
             end
@@ -13161,7 +13110,6 @@ do
             end
 
             if not stillValid() then
-                walkHome()
                 return
             end
 
@@ -13193,7 +13141,6 @@ do
             hum.AutoRotate = true
             char:SetAttribute("overridelookscript", false)
             task.wait(0.2)
-            walkHome()
         end
 
         task.spawn(function()
@@ -13221,9 +13168,6 @@ do
             Help.range = v
         end, {Flag = "AutoHelpTrapRange"})
 
-        GenCard:AddToggle("Return After Help", true, function(v)
-            Help.home = v
-        end, {Flag = "AutoHelpTrapReturn"})
     end
 
     GenCard:AddDropdown("Gen Boost Mode", {"Manual Repair", "Auto Repair"}, false, function(bypassGenMode)
@@ -14402,10 +14346,10 @@ SelfHealToggle:AddKeyPicker("None")
 -- ===== Heal & Bandage =====
 do
     local HealCard = S_Page:CreateSection("Heal & Bandage", "heart-pulse")
-    local H = {team = false, range = 40, bandage = false, skip = {}}
+    local H = {team = false, range = 4.5, bandage = false, skip = {}}
 
     local CSH = game:GetService("CollectionService")
-    local HEAL_REACH = 3.2 -- the game's heal point radius is 4 (+1); stand well inside it, no line of sight needed under 3.5
+    local HEAL_MAX = 5 -- the game's heal point radius is 4 (+1); no line of sight needed under 3.5 studs
     local HEAL_DUMMY_TAGS = {"VDHealTestDummy", "SurvivorBot"}
 
     local function selfBlocked(char)
@@ -14458,14 +14402,29 @@ do
         return r, h
     end
 
-    local function pickHealTarget(myRoot)
-        local best, bestDist = nil, H.range
+    local losParams = RaycastParams.new()
+    losParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    -- same as the game: closer than 3.5 studs needs no line of sight, farther needs a clear ray
+    local function hasLineOfSight(myChar, myRoot, target, tRoot)
+        local d = (tRoot.Position - myRoot.Position).Magnitude
+        if d < 3.5 then
+            return true
+        end
+        losParams.FilterDescendantsInstances = {myChar, target}
+        return workspace:Raycast(myRoot.Position, tRoot.Position - myRoot.Position, losParams) == nil
+    end
+
+    -- heals teammates that are already next to you; it never moves your character
+    local function pickHealTarget(myChar, myRoot)
+        local reach = math.min(H.range, HEAL_MAX)
+        local best, bestDist = nil, reach
         for _, ch in ipairs(healCharacters()) do
             if (H.skip[ch] or 0) < os.clock() then
                 local r = canHeal(ch)
                 if r then
                     local d = (r.Position - myRoot.Position).Magnitude
-                    if d <= bestDist then
+                    if d <= bestDist and hasLineOfSight(myChar, myRoot, ch, r) then
                         best, bestDist = ch, d
                     end
                 end
@@ -14474,71 +14433,39 @@ do
         return best
     end
 
-    local function healOne(target, myChar)
-        local Walk = _G.Ox.Walk
+    local function healOne(target, myChar, myRoot)
         local tRoot, tHum = canHeal(target)
         if not tRoot then
             return
         end
-
-        local function targetOk()
-            local c = localPlayer.Character
-            local r = c and c:FindFirstChild("HumanoidRootPart")
-            return H.team and _G.Ox.ScriptAlive and c == myChar and r ~= nil and not selfBusy(c) and not r:HasTag("doing action")
-                and canHeal(target) ~= nil and tHum.Health < tHum.MaxHealth
+        -- the game only starts a heal when you are standing still
+        local waited = 0
+        while myRoot.AssemblyLinearVelocity.Magnitude >= 6 and waited < 1 do
+            task.wait(0.1)
+            waited += 0.1
+        end
+        if myRoot.AssemblyLinearVelocity.Magnitude >= 6 then
+            H.skip[target] = os.clock() + 1
+            return
         end
 
-        -- once healing has started the game tags both characters as "doing action", so keep-going
-        -- only checks that nothing actually interrupted the heal
         local function keepOk()
             local c = localPlayer.Character
             return H.team and _G.Ox.ScriptAlive and c == myChar and c ~= nil and not selfBlocked(c)
                 and target.Parent ~= nil and tHum.Health > 0 and tHum.Health < tHum.MaxHealth
                 and not target:GetAttribute("IsHooked") and not target:GetAttribute("IsCarried")
                 and not target:GetAttribute("Trapped")
+                and (tRoot.Position - myRoot.Position).Magnitude <= HEAL_MAX + 0.5
         end
 
-        for _ = 1, 4 do
-            local result = Walk.to(tRoot.Position, {
-                stop = HEAL_REACH,
-                timeout = 35,
-                alive = targetOk,
-                owner = "heal",
-                prio = 2,
-                follow = function()
-                    return tRoot.Parent and tRoot.Position or nil
-                end,
-            })
-            if result ~= "reached" then
-                H.skip[target] = os.clock() + ((result == "nopath" or result == "stuck" or result == "timeout") and 10 or 1.5)
-                return
-            end
-
-            -- standing still next to them, start healing the way the game does
-            local myRoot = myChar:FindFirstChild("HumanoidRootPart")
-            if not (myRoot and targetOk()) then
-                return
-            end
-            local flat = Vector3.new(tRoot.Position.X, myRoot.Position.Y, tRoot.Position.Z)
-            if (flat - myRoot.Position).Magnitude > 0.1 then
-                myRoot.CFrame = CFrame.lookAt(myRoot.Position, flat) -- rotate only
-            end
-            _G.Ox.Net.heal(tRoot, true)
-            local t0 = tick()
-            local keep = true
-            while keep and tick() - t0 < 20 do
-                task.wait(0.2)
-                if not keepOk() then
-                    keep = false
-                elseif (tRoot.Position - myRoot.Position).Magnitude > 4.8 then
-                    break -- they walked off: stop, then follow them again
-                end
-            end
-            _G.Ox.Net.heal(tRoot, false)
-            if not keep or tHum.Health >= tHum.MaxHealth or tick() - t0 >= 20 then
-                return
-            end
-            task.wait(0.15)
+        _G.Ox.Net.heal(tRoot, true)
+        local t0 = tick()
+        while keepOk() and tick() - t0 < 20 do
+            task.wait(0.2)
+        end
+        _G.Ox.Net.heal(tRoot, false)
+        if tick() - t0 < 1 then
+            H.skip[target] = os.clock() + 2 -- the server did not accept it, do not spam the same target
         end
     end
 
@@ -14546,23 +14473,22 @@ do
         H.team = v
     end, {Flag = "HealTeam"})
 
-    HealCard:AddSlider("Heal Search Range", 10, 150, 40, function(v)
+    HealCard:AddSlider("Heal Range", 2, 6, 4.5, function(v)
         H.range = v
-    end, {Flag = "HealTeamRange"})
+    end, {Increment = 0.5, Flag = "HealTeamRange"})
 
     task.spawn(function()
         while _G.Ox.ScriptAlive do
-            task.wait(0.3)
+            task.wait(0.25)
             if H.team and localPlayer.Team and localPlayer.Team.Name ~= "Killer" then
                 local char = localPlayer.Character
                 local hum = char and char:FindFirstChildOfClass("Humanoid")
                 local myRoot = char and char:FindFirstChild("HumanoidRootPart")
                 -- the game heals yourself first when you are at 50 HP or below; Self Heal covers that case
                 if hum and myRoot and hum.Health > 50 and not selfBusy(char) and not myRoot:HasTag("doing action") then
-                    local target = pickHealTarget(myRoot)
-                    if target and _G.Ox.Walk.try("heal", 2) then
-                        pcall(healOne, target, char)
-                        _G.Ox.Walk.free("heal")
+                    local target = pickHealTarget(char, myRoot)
+                    if target then
+                        pcall(healOne, target, char, myRoot)
                     end
                 end
             end
@@ -14987,7 +14913,7 @@ do
         task.spawn(function()
             while autoOn do
                 task.wait(0.5)
-                -- any hooked teammate, near or far: go straight to the nearest one, unhook, return
+                -- any hooked teammate: walk to the nearest one and unhook
                 pcall(function()
                     if tpToHooked and #hookedTeammates() > 0 then
                         tpToHooked(true, true)
@@ -14997,73 +14923,63 @@ do
         end)
     end, {Flag = "MeowX_AutoUnhook"})
 
-    -- ===== Teleport to hooked survivor (+ unhook, then return) =====
-    local returnBack, returnDelay, tpBusy = true, 600, false
+    -- ===== Unhook: walk to the hook like a normal player, then unhook (no teleport, no return trip) =====
+    local tpBusy = false
     local autoTried = setmetatable({}, {__mode = "k"})
-
-    local function moveTo(hrp, cf)
-        hrp.CFrame = cf
-        hrp.AssemblyLinearVelocity = Vector3.zero
-    end
 
     tpToHooked = function(doUnhook, silent)
         if tpBusy then return end
         local ch = localPlayer.Character
         local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
         if not hrp then return end
-        if ch:GetAttribute("IsHooked") or ch:GetAttribute("IsCarried") then
-            lib:Notify({Title = "Unhook", Description = "Tidak bisa saat digendong / di hook", Duration = 2})
+        if ch:GetAttribute("IsHooked") or ch:GetAttribute("IsCarried") or ch:GetAttribute("Trapped") then
+            if not silent then
+                lib:Notify({Title = "Unhook", Description = "Tidak bisa saat digendong / di hook / trap", Duration = 2})
+            end
             return
         end
         local best, bestD
         for _, e in ipairs(hookedTeammates()) do
             local d = (e[2].Position - hrp.Position).Magnitude
-            -- auto mode: do not keep re-teleporting to a hook that already failed recently
             local skip = silent and autoTried[e[3]] and tick() - autoTried[e[3]] < 6
             if not skip and (not bestD or d < bestD) then best, bestD = e, d end
         end
         if not best then
-            -- nobody is hooked: do NOT teleport anywhere
             if not silent then
                 lib:Notify({Title = "Unhook", Description = "Tidak ada survivor di hook", Duration = 2})
             end
             return
         end
+        local Walk = _G.Ox.Walk
+        if not Walk.try("unhook", 3) then return end
         tpBusy = true
-        local origin = hrp.CFrame
         local hp = best[3]
         if silent then autoTried[hp] = tick() end
-        moveTo(hrp, hp.CFrame + Vector3.new(0, 3, 0))
-        if doUnhook then
-            task.wait(0.15)
-            -- fire UnHookEvent(HookPoint); retry up to 3x while the survivor is still hooked
-            for _ = 1, 3 do
-                lastFire[hp] = nil
-                unhook(hp)
-                task.wait(0.3)
-                if not best[1]:GetAttribute("IsHooked") then break end
+        pcall(function()
+            local function stillHooked()
+                return best[1].Parent ~= nil and best[1]:GetAttribute("IsHooked") == true
             end
-            if returnBack then
-                task.wait(returnDelay / 1000)
-                local nowHrp = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if nowHrp then moveTo(nowHrp, origin) end
+            local function ok()
+                local c = localPlayer.Character
+                return _G.Ox.ScriptAlive and c == ch and stillHooked() and not (c:GetAttribute("IsHooked") or c:GetAttribute("IsCarried") or c:GetAttribute("Trapped"))
             end
-        end
+            local result = Walk.to(hp.Position, {stop = 4, timeout = 45, alive = ok, owner = "unhook", prio = 3})
+            if result == "reached" and doUnhook then
+                for _ = 1, 3 do
+                    lastFire[hp] = nil
+                    unhook(hp)
+                    task.wait(0.3)
+                    if not stillHooked() then break end
+                end
+            end
+        end)
+        Walk.free("unhook")
         tpBusy = false
     end
 
     Card:AddButton("Unhook Nearest Survivor", function()
         task.spawn(tpToHooked, true)
     end)
-    Card:AddButton("Teleport ke Survivor di Hook", function()
-        task.spawn(tpToHooked, false)
-    end)
-    Card:AddToggle("Kembali ke Posisi Awal", true, function(v)
-        returnBack = v
-    end, {Flag = "MeowX_UnhookReturn"})
-    Card:AddSlider("Return Delay (ms)", 200, 2000, 600, function(v)
-        returnDelay = v
-    end, {Increment = 50, Flag = "MeowX_UnhookReturnDelay"})
 end
 
 local Killer = v:CreateTab("Killer", false, false)
@@ -15614,15 +15530,9 @@ do
 end
 
 do
-    -- ===== Killer Automation =====
-    -- Uses the game's real interaction protocol (KillerActions): start remote(point, id, character),
-    -- killer snaps next to the point, then commit remote(point, id, character). No input simulation.
+    -- ===== Killer Automation (Auto Attack aura only; the teleport based carry/hook/break actions were removed) =====
     local KAuto = K_Page:CreateSection("Killer Automation", "bot")
-    local S = {
-        carry = false, hook = false, pallet = false, gen = false, attack = false,
-        ret = true, range = 120, atkRange = 8,
-        busy = false, carryUntil = 0, atkUntil = 0, rejected = {},
-    }
+    local S = {attack = false, atkRange = 8, atkUntil = 0}
 
     local function remote(...)
         local cur = ReplicatedStorage:FindFirstChild("Remotes")
@@ -15631,31 +15541,7 @@ do
         end
         return cur
     end
-
-    local R = {
-        carry = remote("Carry", "CarrySurvivorEvent"),
-        hook = remote("Carry", "HookEvent"),
-        hookCommit = remote("Carry", "HookCommit"),
-        hookReject = remote("Carry", "HookReject"),
-        pallet = remote("Pallet", "Jason", "Destroy-Global"),
-        palletCommit = remote("Pallet", "Jason", "PalletBreakCommit"),
-        palletReject = remote("Pallet", "Jason", "PalletBreakReject"),
-        gen = remote("Generator", "BreakGenEvent"),
-        genCommit = remote("Generator", "BreakGenCommit"),
-        genReject = remote("Generator", "BreakGenReject"),
-        attack = remote("Attacks", "BasicAttack"),
-    }
-
-    for _, name in ipairs({"hookReject", "palletReject", "genReject"}) do
-        local r = R[name]
-        if r then
-            r.OnClientEvent:Connect(function(id)
-                if typeof(id) == "string" then
-                    S.rejected[id] = true
-                end
-            end)
-        end
-    end
+    local attackRemote = remote("Attacks", "BasicAttack")
 
     local function isKiller()
         return localPlayer.Team ~= nil and localPlayer.Team.Name == "Killer"
@@ -15671,10 +15557,6 @@ do
         return nil
     end
 
-    local function ready(c)
-        return not (c:GetAttribute("Immobile") or c:GetAttribute("IsStunned"))
-    end
-
     local function survivors()
         local list = {}
         for _, plr in ipairs(Players:GetPlayers()) do
@@ -15688,125 +15570,10 @@ do
         return list
     end
 
-    local function validPoint(p)
-        return p:IsA("BasePart") and p.Parent and not CollectionService:HasTag(p, "doing action")
-            and not p.Parent:GetAttribute("Regressing")
-    end
-
-    local function nearest(tag, maxDist, filter)
-        local c, hrp = me()
-        if not c then return nil end
-        local best, bestDist = nil, maxDist
-        for _, p in ipairs(CollectionService:GetTagged(tag)) do
-            if validPoint(p) and (not filter or filter(p)) then
-                local d = (p.Position - hrp.Position).Magnitude
-                if d <= bestDist then
-                    best, bestDist = p, d
-                end
-            end
-        end
-        return best
-    end
-
-    -- start -> snap to aligned spot -> commit -> hold for the action duration
-    local function interact(point, startR, commitR, offset, hold, back)
-        local c, hrp = me()
-        if not (c and startR and commitR) then return false end
-        local id = HttpService:GenerateGUID(false)
-        S.rejected[id] = nil
-        local origin = hrp.CFrame
-        hrp.CFrame = point.CFrame * CFrame.new(offset)
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        pcall(function() startR:FireServer(point, id, c) end)
-        task.wait(0.1)
-        pcall(function() commitR:FireServer(point, id, c) end)
-        pcall(function() hrp.Anchored = true end)
-        local t0 = tick()
-        while tick() - t0 < hold and not S.rejected[id] and _G.Ox.ScriptAlive and me() do
-            task.wait(0.05)
-        end
-        pcall(function() hrp.Anchored = false end)
-        local ok = not S.rejected[id]
-        if back and S.ret and me() then
-            hrp.CFrame = origin
-        end
-        return ok
-    end
-
-    local function hookOccupied(hp)
-        for _, ch in ipairs(survivors()) do
-            local h = ch:FindFirstChild("HumanoidRootPart")
-            if h and ch:GetAttribute("IsHooked") and (h.Position - hp.Position).Magnitude < 10 then
-                return true
-            end
-        end
-        return false
-    end
-
-    local function doHook()
-        local hp = nearest("HookPoint", 1000, function(p) return not hookOccupied(p) end)
-        if not hp then return false end
-        local c = localPlayer.Character
-        interact(hp, R.hook, R.hookCommit, Vector3.new(0, 0.6, 0), 0.6, false)
-        local t0 = tick()
-        while c and c:GetAttribute("IsCarrying") and tick() - t0 < 2.5 do
-            task.wait(0.1)
-        end
-        return true
-    end
-
-    local function doCarry()
-        local c, hrp = me()
-        if not c or not R.carry then return false end
-        local target, bestDist = nil, S.range
-        for _, ch in ipairs(survivors()) do
-            local h = ch:FindFirstChild("HumanoidRootPart")
-            local hum = ch:FindFirstChildOfClass("Humanoid")
-            if h and hum and hum.Health > 0 and hum.Health <= 20 and not ch:GetAttribute("IsCarried") then
-                local progress = ch:GetAttribute("HookedProgress")
-                if not (progress ~= nil and progress < 2) then
-                    local d = (h.Position - hrp.Position).Magnitude
-                    if d <= bestDist then
-                        target, bestDist = ch, d
-                    end
-                end
-            end
-        end
-        if not target then return false end
-        hrp.CFrame = target.HumanoidRootPart.CFrame * CFrame.new(0, 0, 2.5)
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        task.wait(0.1)
-        pcall(function() R.carry:FireServer(target) end)
-        S.carryUntil = tick() + 5.2
-        task.wait(0.5)
-        local animDone = remote("Carry", "CarryAnimDone")
-        if animDone then
-            pcall(function() animDone:FireServer(1) end)
-        end
-        return true
-    end
-
-    local function doPallet()
-        local p = nearest("PalletPointSlide", S.range)
-        if not p then return false end
-        interact(p, R.pallet, R.palletCommit, Vector3.new(0, 0.9, 2), 2.2, true)
-        return true
-    end
-
-    local function doGen()
-        local p = nearest("GeneratorPoint", S.range, function(pt)
-            local progress = pt.Parent:GetAttribute("RepairProgress") or 0
-            local kicks = pt.Parent:GetAttribute("kickcount") or 0
-            return progress > 0 and progress < 100 and kicks <= 7
-        end)
-        if not p then return false end
-        interact(p, R.gen, R.genCommit, Vector3.new(0, 0, 1), 1.95, true)
-        return true
-    end
-
     local function doAttack()
         local c, hrp = me()
-        if not c or not R.attack or tick() < S.atkUntil then return false end
+        if not c or not attackRemote or tick() < S.atkUntil then return false end
+        if c:GetAttribute("Immobile") or c:GetAttribute("IsStunned") then return false end
         local target, bestDist = nil, S.atkRange
         for _, ch in ipairs(survivors()) do
             local h = ch:FindFirstChild("HumanoidRootPart")
@@ -15820,8 +15587,8 @@ do
         end
         if not target then return false end
         local tp = target.HumanoidRootPart.Position
-        hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(tp.X, hrp.Position.Y, tp.Z))
-        pcall(function() R.attack:FireServer() end)
+        hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(tp.X, hrp.Position.Y, tp.Z)) -- rotate only
+        pcall(function() attackRemote:FireServer() end)
         S.atkUntil = tick() + 1.2
         return true
     end
@@ -15829,33 +15596,13 @@ do
     task.spawn(function()
         while _G.Ox.ScriptAlive do
             task.wait(0.3)
-            local c = me()
-            if c and isKiller() and not S.busy and ready(c) then
-                S.busy = true
-                pcall(function()
-                    if c:GetAttribute("IsCarrying") then
-                        if S.hook then doHook() end
-                    elseif S.carry and tick() >= S.carryUntil and doCarry() then
-                        -- carried: hooking happens on the next tick
-                    elseif S.attack and doAttack() then
-                        -- attacked
-                    elseif S.gen and doGen() then
-                    elseif S.pallet then
-                        doPallet()
-                    end
-                end)
-                S.busy = false
+            if S.attack and isKiller() then
+                pcall(doAttack)
             end
         end
     end)
 
-    KAuto:AddToggle("Auto Carry (Downed)", false, function(v) S.carry = v end, {Flag = "MeowX_AutoCarry"})
-    KAuto:AddToggle("Auto Hook (Carried)", false, function(v) S.hook = v end, {Flag = "MeowX_AutoHook"})
-    KAuto:AddToggle("Auto Break Generator", false, function(v) S.gen = v end, {Flag = "MeowX_AutoBreakGen"})
-    KAuto:AddToggle("Auto Break Pallet", false, function(v) S.pallet = v end, {Flag = "MeowX_AutoBreakPallet"})
     KAuto:AddToggle("Auto Attack (Aura)", false, function(v) S.attack = v end, {Flag = "MeowX_AutoAttack"})
-    KAuto:AddToggle("Return To Position", true, function(v) S.ret = v end, {Flag = "MeowX_AutoReturn"})
-    KAuto:AddSlider("Auto Range (studs)", 20, 300, 120, function(v) S.range = v end, {Increment = 5, Flag = "MeowX_AutoRange"})
     KAuto:AddSlider("Attack Range", 4, 15, 8, function(v) S.atkRange = v end, {Increment = 1, Flag = "MeowX_AtkRange"})
 end
 
@@ -16343,276 +16090,6 @@ local v63 = NextKillerCard:AddToggle("Spectator info", false, function(arg)
 end, {Flag = "SpectatorInfo"})
 
 SpectatorToggle = v63
-local Teleport = v:CreateTab("Teleport", false, false)
-TeleportTab = Teleport
-local Teleport2 = TeleportTab:CreatePage("Teleport")
-T_Page = Teleport2
-local v64 = T_Page:CreateSection("Teleport Map", "map")
-TeleportMapCard = v64
-
-TeleportMapCard:AddButton("Refresh Map Cache", function()
-    fn2()
-    _G.Ox.Teleport.GenIndex = 1
-    _G.Ox.Teleport.HookIndex = 1
-    _G.Ox.Teleport.GateIndex = 1
-    _G.Ox.Teleport.PalletIndex = 1
-    _G.Ox.Teleport.WindowIndex = 1
-
-    lib:Notify({
-        Title = "Refresh",
-        Description = "Cache map di-refresh!",
-        Duration = 2,
-    })
-end)
-
-TeleportMapCard:AddButton("Teleport ke Generator", function()
-    if #tbl.Generators == 0 then
-        fn2()
-    end
-
-    if #tbl.Generators < _G.Ox.Teleport.GenIndex then
-        _G.Ox.Teleport.GenIndex = 1
-    end
-
-    local v65 = tbl.Generators[_G.Ox.Teleport.GenIndex]
-
-    if v65 and v65.part then
-        fn3(v65.part)
-
-        lib:Notify({
-            Title = "TP Generator",
-            Description = "Generator " .. _G.Ox.Teleport.GenIndex,
-            Duration = 1.2,
-        })
-    else
-        lib:Notify({
-            Title = "TP Generator",
-            Description = "Generator tidak ditemukan!",
-            Duration = 2,
-        })
-    end
-
-    _G.Ox.Teleport.GenIndex = _G.Ox.Teleport.GenIndex + 1
-end)
-
-TeleportMapCard:AddButton("Teleport ke Hook", function()
-    if #tbl.Hooks == 0 then
-        fn2()
-    end
-
-    if #tbl.Hooks < _G.Ox.Teleport.HookIndex then
-        _G.Ox.Teleport.HookIndex = 1
-    end
-
-    local v65 = tbl.Hooks[_G.Ox.Teleport.HookIndex]
-    local basePart = v65
-
-    if v65 then
-        local hookPoint = v65:FindFirstChild("HookPoint")
-        basePart = hookPoint or v65:FindFirstChildWhichIsA("BasePart")
-    end
-
-    if basePart then
-        fn3(basePart)
-
-        lib:Notify({
-            Title = "TP Hook",
-            Description = "Hook " .. _G.Ox.Teleport.HookIndex,
-            Duration = 1.2,
-        })
-    end
-
-    _G.Ox.Teleport.HookIndex = _G.Ox.Teleport.HookIndex + 1
-end)
-
-TeleportMapCard:AddButton("Teleport ke Gate", function()
-    if #tbl.Gates == 0 then
-        fn2()
-    end
-
-    if #tbl.Gates < _G.Ox.Teleport.GateIndex then
-        _G.Ox.Teleport.GateIndex = 1
-    end
-
-    local v65 = tbl.Gates[_G.Ox.Teleport.GateIndex]
-    local basePart = v65 and v65:FindFirstChildWhichIsA("BasePart")
-
-    if basePart then
-        fn3(basePart)
-
-        lib:Notify({
-            Title = "TP Gate",
-            Description = "Gate " .. _G.Ox.Teleport.GateIndex,
-            Duration = 1.2,
-        })
-    end
-
-    _G.Ox.Teleport.GateIndex = _G.Ox.Teleport.GateIndex + 1
-end)
-
-TeleportMapCard:AddButton("Teleport ke Pallet", function()
-    if #tbl.Pallets == 0 then
-        fn2()
-    end
-
-    if #tbl.Pallets < _G.Ox.Teleport.PalletIndex then
-        _G.Ox.Teleport.PalletIndex = 1
-    end
-
-    local v65 = tbl.Pallets[_G.Ox.Teleport.PalletIndex]
-    local basePart = v65
-
-    if v65 then
-        local primaryPartPallet = v65:FindFirstChild("PrimaryPartPallet")
-        basePart = primaryPartPallet or v65:FindFirstChildWhichIsA("BasePart")
-    end
-
-    if basePart then
-        fn3(basePart)
-
-        lib:Notify({
-            Title = "TP Pallet",
-            Description = "Pallet " .. _G.Ox.Teleport.PalletIndex,
-            Duration = 1.2,
-        })
-    end
-
-    _G.Ox.Teleport.PalletIndex = _G.Ox.Teleport.PalletIndex + 1
-end)
-
-TeleportMapCard:AddButton("Teleport ke Window", function()
-    if #tbl.Windows == 0 then
-        fn2()
-    end
-
-    if #tbl.Windows < _G.Ox.Teleport.WindowIndex then
-        _G.Ox.Teleport.WindowIndex = 1
-    end
-
-    local v65 = tbl.Windows[_G.Ox.Teleport.WindowIndex]
-    local basePart = v65
-
-    if v65 then
-        local bottom = v65:FindFirstChild("Bottom")
-        basePart = bottom or v65:FindFirstChildWhichIsA("BasePart")
-    end
-
-    if basePart then
-        fn3(basePart)
-
-        lib:Notify({
-            Title = "TP Window",
-            Description = "Window " .. _G.Ox.Teleport.WindowIndex,
-            Duration = 1.2,
-        })
-    end
-
-    _G.Ox.Teleport.WindowIndex = _G.Ox.Teleport.WindowIndex + 1
-end)
-
-local v65 = T_Page:CreateSection("Teleport Player", "users")
-PlayerCard = v65
-local v66 = nil
-local tbl6 = {}
-
-local function fn23()
-    tbl6 = {}
-
-    for k, player in pairs(Players:GetPlayers()) do
-        if player ~= localPlayer and player.Character then
-            table.insert(tbl6, player.Name)
-        end
-    end
-
-    table.sort(tbl6)
-end
-
-fn23()
-
-local v67 = PlayerCard:AddDropdown("Pilih Player", tbl6, false, function(arg)
-    v66 = arg
-end)
-
-PlayerDropdown = v67
-
-PlayerCard:AddButton("Refresh Player List", function()
-    fn23()
-
-    pcall(function()
-        if PlayerDropdown.Refresh then
-            PlayerDropdown:Refresh(tbl6)
-        elseif PlayerDropdown.SetValues then
-            PlayerDropdown:SetValues(tbl6)
-        elseif PlayerDropdown.SetOptions then
-            PlayerDropdown:SetOptions(tbl6)
-        elseif PlayerDropdown.Update then
-            PlayerDropdown:Update(tbl6)
-        end
-    end)
-
-    lib:Notify({
-        Title = "Refresh",
-        Description = "List player di-refresh! (" .. #tbl6 .. " player)",
-        Duration = 2,
-    })
-end)
-
-Players.PlayerAdded:Connect(function()
-    task.wait(0.3)
-    fn23()
-
-    pcall(function()
-        if PlayerDropdown.Refresh then
-            PlayerDropdown:Refresh(tbl6)
-        end
-    end)
-end)
-
-Players.PlayerRemoving:Connect(function()
-    task.wait(0.1)
-    fn23()
-
-    pcall(function()
-        if PlayerDropdown.Refresh then
-            PlayerDropdown:Refresh(tbl6)
-        end
-    end)
-end)
-
-PlayerCard:AddButton("Teleport ke Player", function()
-    if v66 and v66 ~= "" then
-        local v68 = Players:FindFirstChild(v66)
-
-        if v68 and v68.Character and v68.Character:FindFirstChild("HumanoidRootPart") then
-            local character = localPlayer.Character
-
-            if character and character:FindFirstChild("HumanoidRootPart") then
-                character.HumanoidRootPart.CFrame = v68.Character.HumanoidRootPart.CFrame + Vector3.new(0, 3, 0)
-
-                lib:Notify({
-                    Title = "Teleport",
-                    Description = "Ke " .. v66,
-                    Duration = 2,
-                })
-            end
-        else
-            lib:Notify({
-                Title = "Error",
-                Description = "Target tidak valid!",
-                Duration = 2,
-            })
-        end
-
-        return
-    end
-
-    lib:Notify({
-        Title = "Error",
-        Description = "Pilih pemain terlebih dulu!",
-        Duration = 3,
-    })
-end)
-
 local Settings = v:CreateTab("Settings", false, false)
 SettingsTab = Settings
 local Settings2 = SettingsTab:CreatePage("Settings")
