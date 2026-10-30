@@ -12896,6 +12896,8 @@ do
     local TrapTab = v:CreateTab("Trap", false, false)
     local TrapPage = TrapTab:CreatePage("Trap")
     TrapCard = TrapPage:CreateSection("Anti Trap", "triangle-alert")
+    -- second group on the Trap tab: Remove Trap + ESP Trap
+    _G.Ox.TrapGroup = TrapPage:CreateSection("Trap", "triangle-alert")
 
     -- diagnostics: shows what the server answers to FreeTrap (e.g. "rejected") in the executor console
     task.spawn(function()
@@ -16041,7 +16043,7 @@ do
             end
         end
     end
-    TrapCard:AddToggle("Trap ESP", false, function(v)
+    _G.Ox.TrapGroup:AddToggle("ESP Trap", false, function(v)
         T.a = v
         refreshOn()
     end, {Flag = "TrapEsp"})
@@ -16179,7 +16181,8 @@ do
     end
 
     local function isArmed(trap)
-        if trap:GetAttribute("Armed") == false or trap:GetAttribute("Triggered") == true then
+        -- same condition the game uses for armed traps: Armed == true, not Triggered, not Disarmed
+        if trap:GetAttribute("Armed") ~= true or trap:GetAttribute("Triggered") or trap:GetAttribute("Disarmed") then
             return false
         end
         local cube = trap:FindFirstChild("Cube", true)
@@ -16228,7 +16231,7 @@ do
         for _, trap in ipairs(allTraps()) do
             if isArmed(trap) and (ignoreCooldown or (Dis.cooldown[trap] or 0) < os.clock()) then
                 local part = trap:IsDescendantOf(workspace) and trapPart(trap)
-                local inRange = (not range) or (part and (part.Position - root.Position).Magnitude <= range)
+                local inRange = (not range) or (not trap:IsDescendantOf(workspace)) or (part and (part.Position - root.Position).Magnitude <= range)
                 if inRange then
                     Dis.cooldown[trap] = os.clock() + 5
                     rem:FireServer("begin", trap)
@@ -16249,15 +16252,15 @@ do
         end
     end)
 
-    TrapCard:AddToggle("Auto Remove Trap", false, function(v)
+    _G.Ox.TrapGroup:AddToggle("Remove Trap", false, function(v)
         Dis.on = v
     end, {Flag = "AutoRemoveTrap"})
 
-    TrapCard:AddSlider("Remove Trap Range", 10, 300, 60, function(v)
+    _G.Ox.TrapGroup:AddSlider("Remove Trap Range", 10, 300, 60, function(v)
         Dis.range = v
     end, {Flag = "AutoRemoveTrapRange"})
 
-    TrapCard:AddButton("Remove All Armed Traps", function()
+    _G.Ox.TrapGroup:AddButton("Remove All Armed Traps", function()
         task.spawn(function()
             local n = select(2, pcall(removeTraps, nil, true)) or 0
             lib:Notify({Title = "Trap", Description = "Disarm sent: " .. tostring(n), Duration = 2})
